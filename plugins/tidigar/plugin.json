@@ -9,7 +9,14 @@
     "url": "https://tidigar.com"
   },
   "homepage": "https://tidigar.com/agents",
-  "keywords": ["roadmap", "gantt", "timeline", "project-plan", "planning"],
+  "repository": "https://github.com/jacobhama/tidigar-skill",
+  "keywords": [
+    "roadmap",
+    "gantt",
+    "timeline",
+    "project-plan",
+    "planning"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {

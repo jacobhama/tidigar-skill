@@ -10,6 +10,13 @@ requests here.
 
 ## Install
 
+Claude Code, as a plugin from this marketplace:
+
+```sh
+claude plugin marketplace add jacobhama/tidigar-skill
+claude plugin install tidigar@tidigar
+```
+
 Codex, as a plugin from this marketplace:
 
 ```sh
@@ -18,14 +25,6 @@ codex plugin marketplace add jacobhama/tidigar-skill
 
 Then install Tidigar from the plugin list.
 
-Codex or Claude Code, as a skill:
-
-```sh
-curl -sLO https://tidigar.com/agents/tidigar-skill.zip
-unzip -o tidigar-skill.zip -d ~/.agents/skills   # Codex
-unzip -o tidigar-skill.zip -d ~/.claude/skills   # Claude Code
-```
-
 ChatGPT and Claude apps: upload
 [tidigar-skill.zip](https://tidigar.com/agents/tidigar-skill.zip) as a skill.
 
@@ -33,8 +32,10 @@ Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
 
 ## Contents
 
-- `.agents/plugins/marketplace.json`: the marketplace, listing one plugin.
-- `plugins/tidigar/plugin.json`: the plugin manifest.
+- `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`:
+  the Claude Code and Codex marketplaces, each listing the one plugin.
+- `plugins/tidigar/.claude-plugin/plugin.json` and `plugins/tidigar/plugin.json`:
+  the plugin's manifests for Claude Code and for Codex and ChatGPT.
 - `plugins/tidigar/skills/tidigar/`: the skill, with `SKILL.md`, the
   reference module under `scripts/`, the examples and the share link
   specification.

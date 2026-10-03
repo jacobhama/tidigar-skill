@@ -1,0 +1,15 @@
+{
+  "name": "tidigar",
+  "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links.",
+  "owner": {
+    "name": "Tidigar",
+    "email": "hello@tidigar.com"
+  },
+  "plugins": [
+    {
+      "name": "tidigar",
+      "source": "./plugins/tidigar",
+      "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar."
+    }
+  ]
+}
