@@ -41,3 +41,7 @@ Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
   specification.
 
 More for agents: [tidigar.com/agents](https://tidigar.com/agents).
+
+## License
+
+MIT, see [LICENSE](LICENSE). The Tidigar name and logo are not licensed.

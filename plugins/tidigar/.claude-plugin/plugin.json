@@ -3,12 +3,19 @@
   "displayName": "Tidigar",
   "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar.",
   "author": {
-    "name": "Tidigar",
+    "name": "Hamacher Software AB",
     "email": "hello@tidigar.com",
     "url": "https://tidigar.com"
   },
   "homepage": "https://tidigar.com/agents",
   "repository": "https://github.com/jacobhama/tidigar-skill",
-  "keywords": ["roadmap", "gantt", "timeline", "project-plan", "planning"],
+  "license": "MIT",
+  "keywords": [
+    "roadmap",
+    "gantt",
+    "timeline",
+    "project-plan",
+    "planning"
+  ],
   "icon": "./assets/icon.png"
 }

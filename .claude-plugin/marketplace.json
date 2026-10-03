@@ -2,7 +2,7 @@
   "name": "tidigar",
   "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links.",
   "owner": {
-    "name": "Tidigar",
+    "name": "Hamacher Software AB",
     "email": "hello@tidigar.com"
   },
   "plugins": [
