@@ -1,0 +1,20 @@
+{
+  "name": "tidigar",
+  "interface": {
+    "displayName": "Tidigar"
+  },
+  "plugins": [
+    {
+      "name": "tidigar",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tidigar"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

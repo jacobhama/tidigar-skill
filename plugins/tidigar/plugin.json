@@ -1,0 +1,33 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tidigar",
+  "version": "1.0.0",
+  "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar.",
+  "author": {
+    "name": "Tidigar",
+    "email": "hello@tidigar.com",
+    "url": "https://tidigar.com"
+  },
+  "homepage": "https://tidigar.com/agents",
+  "keywords": ["roadmap", "gantt", "timeline", "project-plan", "planning"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Tidigar",
+        "shortDescription": "Make roadmaps and Gantt charts as Tidigar links",
+        "longDescription": "Turn a list of activities into a Tidigar share link: one URL that opens the roadmap as an editable timeline, board, table or dependency chart. The link carries the whole roadmap, so no account, API key or upload is involved, and nothing about the roadmap is stored on a server.",
+        "developerName": "Tidigar",
+        "category": "Productivity",
+        "websiteURL": "https://tidigar.com",
+        "defaultPrompt": [
+          "Make a Tidigar Gantt chart of this project plan.",
+          "Turn these milestones into a Tidigar roadmap grouped by team.",
+          "Move the launch in this Tidigar link two weeks later."
+        ],
+        "brandColor": "#1068FC",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/icon.png"
+      }
+    }
+  }
+}

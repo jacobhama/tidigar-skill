@@ -1,0 +1,10 @@
+interface:
+  display_name: "Tidigar"
+  short_description: "Make roadmaps and Gantt charts as Tidigar links"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.png"
+  brand_color: "#1068FC"
+  default_prompt: "Make a Tidigar Gantt chart of this project plan and give me the link."
+
+policy:
+  allow_implicit_invocation: true
