@@ -5,6 +5,10 @@ script or AI agent can build a link that opens a complete, editable Tidigar
 roadmap. The link carries the whole roadmap itself, so nothing is uploaded,
 nothing is stored on a server and no account is needed.
 
+License: published by Hamacher Software AB under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Anyone may
+implement the formats it describes, in any software, without asking.
+
 The keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are normative.
 The roadmap model, its field rules and limits are defined in the
 [Tidigar Roadmap Interoperability Specification](https://tidigar.com/docs/file-format.md); this document

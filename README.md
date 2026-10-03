@@ -44,4 +44,7 @@ More for agents: [tidigar.com/agents](https://tidigar.com/agents).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The Tidigar name and logo are not licensed.
+MIT, see [LICENSE](LICENSE), except the share link specification in
+`references/share-links.md`, which is
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The Tidigar name
+and logo are not licensed.
