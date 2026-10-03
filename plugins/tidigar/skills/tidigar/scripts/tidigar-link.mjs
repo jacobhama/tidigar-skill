@@ -441,8 +441,13 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
-  function validateItemDependencies(items, path = 'items') {
+  // An activity waits for other activities and for fixed milestones,
+  // events on a set date that wait for nothing themselves.
+  function validateItemDependencies(items, path = 'items', milestones = []) {
     const byId = new Map(items.map((item) => [item.id, item]));
+    const fixed = new Map(
+      milestones.filter((milestone) => milestone.fixed).map((point) => [point.id, point]),
+    );
     const visiting = new Set();
     const visited = new Set();
     function visit(item) {
@@ -450,6 +455,7 @@ const scope = { crypto: globalThis.crypto };
       if (visiting.has(item.id)) invalid(`${path}.${item.id}.dependsOn`, 'dependency cycle');
       visiting.add(item.id);
       for (const dependency of item.dependsOn) {
+        if (fixed.has(dependency)) continue;
         if (!byId.has(dependency))
           invalid(`${path}.${item.id}.dependsOn`, `unknown activity ${dependency}`);
         visit(byId.get(dependency));
@@ -460,10 +466,17 @@ const scope = { crypto: globalThis.crypto };
     for (const item of items) visit(item);
 
     // Tidigar dependencies are finish-to-start with one whole day between
-    // records.  Deserialization validates this contract and never moves user
-    // dates as a side effect.
+    // records; a fixed milestone lets work start on its own date.
+    // Deserialization validates this contract and never moves user dates as
+    // a side effect.
     for (const item of items) {
       for (const dependency of item.dependsOn) {
+        const point = fixed.get(dependency);
+        if (point) {
+          if (item.start < point.date)
+            invalid(`${path}.${item.id}.start`, `must not be before fixed milestone ${dependency}`);
+          continue;
+        }
         const parent = byId.get(dependency);
         if (dateTimestamp(item.start) < dayAfter(parent.end))
           invalid(
@@ -474,7 +487,12 @@ const scope = { crypto: globalThis.crypto };
     }
   }
 
-  function normalizeItems(value, contextInput, registry = makeIdRegistry()) {
+  function normalizeItems(
+    value,
+    contextInput,
+    registry = makeIdRegistry(),
+    deferDependencies = false,
+  ) {
     const context = contextFrom(contextInput);
     const items = requireArray(value, 'items', MAX_ITEMS).map((item, index) => {
       const path = `items[${index}]`;
@@ -493,7 +511,8 @@ const scope = { crypto: globalThis.crypto };
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       return { id, projectId, title, description, progress, start, end, values, dependsOn };
     });
-    validateItemDependencies(items);
+    // A whole project checks dependencies once its milestones are known.
+    if (!deferDependencies) validateItemDependencies(items);
     return items;
   }
 
@@ -692,11 +711,16 @@ const scope = { crypto: globalThis.crypto };
       const title = stringValue(source.title, `${path}.title`, 180, true);
       const date = dateValue(source.date, `${path}.date`);
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
+      const fixed = booleanValue(source.fixed, `${path}.fixed`, false);
+      // A fixed milestone is an event on a set date: work waits for
+      // it, and it waits for nothing.
+      if (fixed && dependsOn.length)
+        invalid(`${path}.dependsOn`, 'must be empty for a fixed milestone');
       for (const dependency of dependsOn) {
         if (!byItemId.has(dependency))
           invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
       }
-      return { id, projectId, title, date, dependsOn };
+      return { id, projectId, title, date, dependsOn, fixed };
     });
   }
 
@@ -739,11 +763,12 @@ const scope = { crypto: globalThis.crypto };
     const source = requireRecord(value, 'project');
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
-    const items = normalizeItems(source.items, manifest, registry);
+    const items = normalizeItems(source.items, manifest, registry, true);
     const itemIds = new Set(items.map((item) => item.id));
     const sharedViews = normalizeViews(source.sharedViews, manifest, registry);
     const milestones = normalizeMilestones(source.milestones, manifest, itemIds, registry);
     const periodIndicators = normalizePeriodIndicators(source.periodIndicators, manifest, registry);
+    validateItemDependencies(items, 'items', milestones);
     validateMilestoneDates(milestones, items);
     return { manifest, items, sharedViews, milestones, periodIndicators };
   }
@@ -1322,7 +1347,11 @@ const scope = { crypto: globalThis.crypto };
           optionIndex.set(option.id, [index, position]),
         );
       });
-      const itemIndex = new Map(project.items.map((item, index) => [item.id, index]));
+      // Dependency indexes count the items first, then the milestones.
+      const itemIndex = new Map([
+        ...project.items.map((item, index) => [item.id, index]),
+        ...project.milestones.map((point, index) => [point.id, project.items.length + index]),
+      ]);
       const dependencies = (ids) => ids.map((id) => itemIndex.get(id));
       const defaults = model.normalizeViews(
         [{ id: model.uuid(), projectId: manifest.projectId, name: '-' }],
@@ -1382,8 +1411,13 @@ const scope = { crypto: globalThis.crypto };
       if (project.milestones.length)
         payload.s = project.milestones.map((milestone) =>
           trimTail(
-            [milestone.title, day(milestone.date), dependencies(milestone.dependsOn)],
-            [null, null, []],
+            [
+              milestone.title,
+              day(milestone.date),
+              dependencies(milestone.dependsOn),
+              milestone.fixed ? 1 : 0,
+            ],
+            [null, null, [], 0],
           ),
         );
       if (project.periodIndicators.length)
@@ -1507,7 +1541,10 @@ const scope = { crypto: globalThis.crypto };
         integer(choice) === 0 ? '' : at(dimension.options, choice - 1).id;
       const packedItems = list(payload.i).map(list);
       const itemIds = packedItems.map((_, index) => id(like?.items[index]));
+      const milestoneIds = list(payload.s).map((_, index) => id(like?.milestones[index]));
       const dependencies = (value) => list(value).map((index) => at(itemIds, index));
+      // An activity may also wait for a milestone, counted after the items.
+      const predecessors = [...itemIds, ...milestoneIds];
 
       const objectValue = (value) => {
         if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -1574,18 +1611,24 @@ const scope = { crypto: globalThis.crypto };
                 ])
                 .filter(([, id]) => id),
             ),
-            dependsOn: dependencies(dependsOn),
+            dependsOn: list(dependsOn).map((position) => at(predecessors, position)),
           };
         }),
         sharedViews: list(payload.v).map((packed, index) =>
           own({ ...unpackView(packed), name: packed.name }, like?.sharedViews[index]),
         ),
         milestones: list(payload.s).map((entry, index) => {
-          const [title, day, dependsOn] = list(entry);
-          return own(
-            { title, date: date(day), dependsOn: dependencies(dependsOn) },
-            like?.milestones[index],
-          );
+          const [title, day, dependsOn, fixed = 0] = list(entry);
+          if (fixed !== 0 && fixed !== 1)
+            fail('invalid', 'The share link has an invalid milestone.');
+          return {
+            id: milestoneIds[index],
+            projectId,
+            title,
+            date: date(day),
+            dependsOn: dependencies(dependsOn),
+            fixed: fixed === 1,
+          };
         }),
         periodIndicators: list(payload.p).map((entry, index) => {
           const [title, start, length, periodColor, vacation = 1] = list(entry);
@@ -1632,7 +1675,11 @@ const scope = { crypto: globalThis.crypto };
       const project = JSON.parse(JSON.stringify(source));
       let view = initialView ? JSON.parse(JSON.stringify(initialView)) : null;
       if (options.visibleItemIds) {
-        const kept = new Set(options.visibleItemIds);
+        // Milestones stay, so activities keep waiting for fixed ones.
+        const kept = new Set([
+          ...options.visibleItemIds,
+          ...project.milestones.filter((point) => point.fixed).map((point) => point.id),
+        ]);
         project.items = project.items.filter((item) => kept.has(item.id));
         for (const record of [...project.items, ...project.milestones])
           record.dependsOn = record.dependsOn.filter((id) => kept.has(id));
@@ -1864,7 +1911,7 @@ const scope = { crypto: globalThis.crypto };
       'view',
     ],
     activity: ['title', 'start', 'end', 'description', 'progress', 'values', 'dependsOn'],
-    milestone: ['title', 'date', 'dependsOn'],
+    milestone: ['title', 'date', 'dependsOn', 'fixed'],
     period: ['title', 'start', 'end', 'color', 'vacation'],
     option: ['name', 'color'],
     view: Object.keys(VIEW_FIELDS),
@@ -1974,7 +2021,14 @@ const scope = { crypto: globalThis.crypto };
       if (typeof activity.title !== 'string') return;
       titles.set(activity.title, titles.has(activity.title) ? -1 : index);
     });
-    const dependencies = (value, path) =>
+    // An activity may also wait for a fixed milestone, named by its
+    // title; in the link it counts after the activities.
+    const fixed = new Map();
+    list(plan.milestones, 'milestones').forEach((milestone, index) => {
+      if (milestone?.fixed !== true || typeof milestone.title !== 'string') return;
+      fixed.set(milestone.title, fixed.has(milestone.title) ? -1 : index);
+    });
+    const dependencies = (value, path, milestones = false) =>
       list(value, path).map((reference, position) => {
         const at = `${path}[${position}]`;
         if (Number.isInteger(reference)) {
@@ -1984,7 +2038,16 @@ const scope = { crypto: globalThis.crypto };
         }
         if (typeof reference !== 'string') fail(at, 'expected an activity title or index');
         const found = titles.get(reference);
-        if (found === undefined) fail(at, `no activity is titled ${JSON.stringify(reference)}`);
+        if (found === undefined && milestones && fixed.has(reference)) {
+          if (fixed.get(reference) < 0)
+            fail(at, `several fixed milestones are titled ${JSON.stringify(reference)}`);
+          return activities.length + fixed.get(reference);
+        }
+        if (found === undefined)
+          fail(
+            at,
+            `no activity${milestones && fixed.size ? ' or fixed milestone' : ''} is titled ${JSON.stringify(reference)}`,
+          );
         if (found < 0)
           fail(at, `several activities are titled ${JSON.stringify(reference)}; use an index`);
         return found;
@@ -2020,7 +2083,7 @@ const scope = { crypto: globalThis.crypto };
         description: text(activity.description, `${path}.description`, ''),
         progress: activity.progress ?? 0,
         values: Array.from(values, (value) => value ?? 0),
-        dependsOn: dependencies(activity.dependsOn, `${path}.dependsOn`),
+        dependsOn: dependencies(activity.dependsOn, `${path}.dependsOn`, true),
       };
     });
     const milestones = list(plan.milestones, 'milestones').map((milestone, index) => {
@@ -2028,10 +2091,15 @@ const scope = { crypto: globalThis.crypto };
       record(milestone, path, 'milestone');
       const day = date(milestone.date, `${path}.date`);
       dated.push(day);
+      if (milestone.fixed !== undefined && typeof milestone.fixed !== 'boolean')
+        fail(`${path}.fixed`, 'expected true or false');
+      if (milestone.fixed && list(milestone.dependsOn, `${path}.dependsOn`).length)
+        fail(`${path}.dependsOn`, 'a fixed milestone waits for nothing');
       return {
         title: text(milestone.title, `${path}.title`),
         day,
         dependsOn: dependencies(milestone.dependsOn, `${path}.dependsOn`),
+        fixed: milestone.fixed === true,
       };
     });
     const periods = list(plan.periods, 'periods').map((period, index) => {
@@ -2095,7 +2163,10 @@ const scope = { crypto: globalThis.crypto };
       });
     if (milestones.length)
       payload.s = milestones.map((milestone) =>
-        trim([milestone.title, milestone.day - base, milestone.dependsOn], [null, null, []]),
+        trim(
+          [milestone.title, milestone.day - base, milestone.dependsOn, milestone.fixed ? 1 : 0],
+          [null, null, [], 0],
+        ),
       );
     if (periods.length)
       payload.p = periods.map((period) =>
@@ -2153,6 +2224,8 @@ const scope = { crypto: globalThis.crypto };
     const counts = new Map();
     for (const [title = ''] of items) counts.set(title, (counts.get(title) || 0) + 1);
     const reference = (index) => {
+      // Past the activities, an index is a fixed milestone, named by title.
+      if (index >= items.length) return payload.s[index - items.length][0];
       const title = items[index][0] ?? '';
       return title && counts.get(title) === 1 ? title : index;
     };
@@ -2199,9 +2272,10 @@ const scope = { crypto: globalThis.crypto };
         },
       );
     if (payload.s?.length)
-      plan.milestones = payload.s.map(([title, date, dependsOn = []]) => {
+      plan.milestones = payload.s.map(([title, date, dependsOn = [], fixed = 0]) => {
         const milestone = { title, date: day(date) };
         if (dependsOn.length) milestone.dependsOn = dependsOn.map(reference);
+        if (fixed === 1) milestone.fixed = true;
         return milestone;
       });
     if (payload.p?.length)
@@ -2268,6 +2342,7 @@ function inPlanTerms(error) {
 function describe(project, labels = PAYLOAD_LABELS) {
   const position = new Map();
   project.items.forEach((item, index) => position.set(item.id, `${labels.i}[${index}]`));
+  project.milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
   const after = (record) =>
     record.dependsOn.length
       ? ` · after ${record.dependsOn.map((id) => position.get(id)).join(', ')}`
@@ -2289,7 +2364,8 @@ function describe(project, labels = PAYLOAD_LABELS) {
     ),
     ...milestones.map(
       (milestone, index) =>
-        `${labels.s}[${index}] ${milestone.title}: ${milestone.date}${after(milestone)}`,
+        `${labels.s}[${index}] ${milestone.title}: ${milestone.date}` +
+        `${milestone.fixed ? ' · fixed' : ''}${after(milestone)}`,
     ),
     ...periodIndicators.map(
       (period, index) => `${labels.p}[${index}] ${period.title}: ${period.start} – ${period.end}`,

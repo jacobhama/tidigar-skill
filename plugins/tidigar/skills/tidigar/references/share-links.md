@@ -89,29 +89,38 @@ Missing lists are empty. At most 20 dimensions with 100 options each.
 [title, start, length, description, progress, values, dependsOn]
 ```
 
-| Position | Field         | Value                                                                  |
-| -------- | ------------- | ---------------------------------------------------------------------- |
-| 0        | `title`       | text, max 180 characters; may be empty                                 |
-| 1        | `start`       | day offset                                                             |
-| 2        | `length`      | days to the inclusive end, 0 or more                                   |
-| 3        | `description` | text; default `""`                                                     |
-| 4        | `progress`    | one of `0`, `25`, `50`, `75`, `100`; default `0`                       |
-| 5        | `values`      | option numbers in dimension order; default `[]`                        |
-| 6        | `dependsOn`   | activity indices; each dependency MUST end before this activity starts |
+| Position | Field         | Value                                            |
+| -------- | ------------- | ------------------------------------------------ |
+| 0        | `title`       | text, max 180 characters; may be empty           |
+| 1        | `start`       | day offset                                       |
+| 2        | `length`      | days to the inclusive end, 0 or more             |
+| 3        | `description` | text; default `""`                               |
+| 4        | `progress`    | one of `0`, `25`, `50`, `75`, `100`; default `0` |
+| 5        | `values`      | option numbers in dimension order; default `[]`  |
+| 6        | `dependsOn`   | predecessor indices; see below                   |
 
 Trailing default positions MAY be left out, and trailing `0` entries in
 `values` MAY be left out. A missing value and `0` mean the same: no option.
 
+A predecessor index below the number of activities refers to an activity,
+which MUST end before this activity starts. An index from the number of
+activities upward refers to the milestone at that index minus the number of
+activities; it MUST be a fixed milestone, and this activity MUST NOT start
+before its date.
+
 ### Milestone and period tuples
 
 ```text
-[title, date, dependsOn]            milestone: dependsOn holds activity indices
+[title, date, dependsOn, fixed]  milestone: dependsOn holds activity indices,
+                                    fixed is 1 or 0, default 0
 [title, start, length, color, vacation]
                                     period band: vacation is 1 or 0, default 1
 ```
 
 A milestone's date MUST be at least one day after the end of each activity it
-depends on. Titles are 1–180 characters. In a roadmap planned in work days,
+depends on. A fixed milestone, an event on a set date that activities
+wait for, has `fixed` 1 and an empty `dependsOn`; a trailing 0 MAY be left
+out. Titles are 1–180 characters. In a roadmap planned in work days,
 a period with `vacation` 1 has no work days; a trailing 1 MAY be left out.
 
 ### View object

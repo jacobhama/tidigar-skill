@@ -17,8 +17,8 @@ A roadmap is a handful of records. Everything Tidigar shows is a view of them.
 
 - **Activity**: a bar on the timeline. A title, a start date and an inclusive end date, with an optional description, progress (`0`, `25`, `50`, `75` or `100`) and one option per dimension.
 - **Dimension**: a way to sort activities, such as Team, Phase or Status, with options in order, each with a color. Owners, status and categories are all dimensions; there are no other fields for them. Dimensions decide grouping, board rows and columns, colors and filters.
-- **Dependency**: an activity or a milestone waits for activities. It starts at least one day after each of them ends, and there are no cycles. When an activity moves in Tidigar, what waits for it follows.
-- **Milestone**: a titled single date, which can wait for activities.
+- **Dependency**: an activity or a milestone waits for activities. It starts at least one day after each of them ends, and there are no cycles. An activity can also wait for a fixed milestone and start on its date. When an activity or a fixed milestone moves in Tidigar, what waits for it follows.
+- **Milestone**: a titled single date, which can wait for activities. A fixed milestone (`"fixed": true`) is instead an event on a set date, such as a decision or a delivery: it waits for nothing, and activities name it by title in their `dependsOn`.
 - **Period**: a titled band across the timeline, such as a holiday or a sprint. It is a vacation unless it says otherwise.
 - **Work days**: a roadmap is planned in calendar days or in work days: Monday to Friday, without vacation periods. Dates are calendar dates either way.
 - **View**: how the roadmap is shown. `timeline` is the Gantt chart, `grid` a board, `list` a table and `flow` the dependency chart, each arranged by dimensions. A link opens in one view.
@@ -106,8 +106,8 @@ When you can run Python but cannot download the module, write the link's payload
 - `n` name, `y` year, `d` description, `w` `1` for work days.
 - Dates are whole days from January 1 of `y`: 2026-03-02 is `60`, `(date(2026, 3, 2) - date(2026, 1, 1)).days`.
 - `m` dimensions: `[["Team", [["Design", "4f7cff"], ["Development", "16a34a"]]]]`, colors without `#`.
-- `i` activities: `[title, start, length, description, progress, values, dependsOn]`, such as `["Build", 95, 39, "", 0, [2], [1]]`. `length` counts days after the start, so `0` is one day. `values` holds an option number per dimension, `1` for the first option and `0` for none. `dependsOn` holds 0-based activity indices. Trailing defaults may be left out.
-- `s` milestones: `[title, date, dependsOn]`. `p` periods: `[title, start, length, color]`.
+- `i` activities: `[title, start, length, description, progress, values, dependsOn]`, such as `["Build", 95, 39, "", 0, [2], [1]]`. `length` counts days after the start, so `0` is one day. `values` holds an option number per dimension, `1` for the first option and `0` for none. `dependsOn` holds 0-based activity indices; an index from the number of activities up is the milestone at that index minus the number of activities, which must be fixed. Trailing defaults may be left out.
+- `s` milestones: `[title, date, dependsOn, fixed]`, `fixed` `1` for a fixed milestone with an empty `dependsOn`. `p` periods: `[title, start, length, color]`.
 - `o` the view: `{ "view": "timeline", "color": 0, "group": 0 }`, where `color`, `group`, `row` and `col` take a dimension index.
 
 ```python
