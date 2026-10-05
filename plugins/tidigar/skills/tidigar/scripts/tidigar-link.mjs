@@ -96,6 +96,7 @@ const scope = { crypto: globalThis.crypto };
     'view.resolution': Object.freeze([...RESOLUTIONS]),
     'view.timelineScaleRows': Object.freeze([1, 2, 3]),
     'view.textMode': Object.freeze([...TEXT_MODES]),
+    'view.presentationStyle': Object.freeze(['standard', 'minimal', 'airy', 'contrast']),
     'view.timelineActivityRows': Object.freeze([...ACTIVITY_ROW_MODES]),
     'view.timelineMilestoneMode': Object.freeze([...MILESTONE_MODES]),
     'view.timelineWeekDays': Object.freeze([...WEEK_DAY_MODES]),
@@ -629,6 +630,10 @@ const scope = { crypto: globalThis.crypto };
           : currentViewValue('timelineDependencyArrows', source.timelineDependencyArrows);
       if (!DEPENDENCY_ARROW_MODES.has(timelineDependencyArrows))
         invalid(`${path}.timelineDependencyArrows`, 'has an unsupported value');
+      const presentationStyle =
+        source.presentationStyle === undefined ? 'standard' : source.presentationStyle;
+      if (!ENUM_VALUES['view.presentationStyle'].includes(presentationStyle))
+        invalid(`${path}.presentationStyle`, 'has an unsupported value');
       const flowDirection = source.flowDirection === undefined ? 'auto' : source.flowDirection;
       if (!FLOW_DIRECTIONS.has(flowDirection))
         invalid(`${path}.flowDirection`, 'has an unsupported value');
@@ -645,6 +650,7 @@ const scope = { crypto: globalThis.crypto };
         row,
         col,
         color,
+        presentationStyle,
         colorOverrides: normalizeColorOverrides(
           source.colorOverrides,
           optionIds,

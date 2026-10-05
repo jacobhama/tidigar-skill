@@ -148,6 +148,7 @@ except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out
 takes its model default, and encoders SHOULD leave defaults out.
+`presentationStyle` selects `standard` (the default), `minimal`, `airy`, or `contrast`, in both light and dark mode.
 `hideUnconnectedActivities` is a boolean with default `false`; `true` hides
 activities without incoming or outgoing dependencies in Flow.
 
