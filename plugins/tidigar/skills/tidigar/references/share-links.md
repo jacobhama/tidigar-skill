@@ -70,6 +70,7 @@ single day. Colors are six hexadecimal digits without `#`.
 
 | Key | Holds        | Required | Value                                                  |
 | --- | ------------ | -------- | ------------------------------------------------------ |
+| `c` | Link created | no | UTC ISO 8601 `YYYY-MM-DDTHH:mm:ssZ`, valid date and time |
 | `n` | Roadmap name | yes      | text, 1–100 characters, not blank                      |
 | `y` | Year         | yes      | integer 1900–2200; the base of every date              |
 | `d` | Description  | no       | text, max 500 characters; default `""`                 |
@@ -80,6 +81,15 @@ single day. Colors are six hexadecimal digits without `#`.
 | `p` | Period bands | no       | array of period tuples                                 |
 | `v` | Saved views  | no       | array of view objects with a `name`                    |
 | `o` | Initial view | no       | one view object without `name`; default view if absent |
+
+New sharing links carry `c`, the instant the link was created, for example
+`2026-10-05T12:30:00Z`. Readers preserve it as `manifest.shareLinkCreatedAt`
+in the independent local copy and display it in the user's local time zone.
+Editing the copy does not change this value or connect it to the author's plan.
+It is separate from storage modification times. Older links without `c` remain
+valid and do not acquire a timestamp. A new link from a copy gets a new `c`.
+There is no persistent publication identity, replacement or synchronization.
+Static templates may omit `c` when no sharing instant is known.
 
 Missing lists are empty. At most 20 dimensions with 100 options each.
 

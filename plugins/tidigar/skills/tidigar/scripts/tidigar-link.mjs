@@ -379,6 +379,15 @@ const scope = { crypto: globalThis.crypto };
     const description = stringValue(source.description, 'manifest.description', 500, false);
     if (!Number.isInteger(source.year) || source.year < 1900 || source.year > 2200)
       invalid('manifest.year', 'must be an integer from 1900 through 2200');
+    const shareLinkCreatedAt = source.shareLinkCreatedAt;
+    if (
+      shareLinkCreatedAt !== undefined &&
+      (typeof shareLinkCreatedAt !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(shareLinkCreatedAt) ||
+        !Number.isFinite(Date.parse(shareLinkCreatedAt)) ||
+        new Date(shareLinkCreatedAt).toISOString().replace('.000Z', 'Z') !== shareLinkCreatedAt)
+    )
+      invalid('manifest.shareLinkCreatedAt', 'must be a UTC ISO 8601 timestamp with whole seconds');
     const dimensions = normalizeDimensions(source.dimensions, registry);
     const schedule = source.schedule === undefined ? 'calendar-days' : source.schedule;
     if (!SCHEDULES.has(schedule))
@@ -391,6 +400,7 @@ const scope = { crypto: globalThis.crypto };
       dimensions,
       year: source.year,
       schedule,
+      ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
     };
   }
 
@@ -1584,6 +1594,7 @@ const scope = { crypto: globalThis.crypto };
         manifest: {
           projectId,
           formatVersion: 1,
+          ...(payload.c === undefined ? {} : { shareLinkCreatedAt: payload.c }),
           name: payload.n,
           description: payload.d ?? '',
           dimensions,
@@ -1737,10 +1748,21 @@ const scope = { crypto: globalThis.crypto };
      * Encode a project and an optional initial view configuration as a
      * fragment such as `s=1.…`, without the leading `#`. Throws a
      * `ShareLinkError` with code `too-large` (and `length`, `limit`) when
-     * the result exceeds the limit; nothing is ever truncated.
+     * the result exceeds the limit; nothing is ever truncated. New links get
+     * their creation time in UTC, independent of the source copy's metadata.
+     * `createdAt: null` omits it for deterministic static templates.
      */
-    async function encode(project, initialView = null) {
-      const json = JSON.stringify(pack(project, initialView));
+    async function encode(
+      project,
+      initialView = null,
+      { createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') } = {},
+    ) {
+      const payload = pack(project, initialView);
+      if (createdAt !== null) {
+        model.normalizeManifest({ ...project.manifest, shareLinkCreatedAt: createdAt });
+        payload.c = createdAt;
+      }
+      const json = JSON.stringify(payload);
       const bytes = await readAll(
         transform(new TextEncoder().encode(json), new CompressionStream('deflate-raw')),
         Infinity,
@@ -2393,7 +2415,7 @@ export function toPayload(input) {
  * message names the broken rule and the record, such as `activities[2]
  * "Build"` for a plan or `activity i[2] "Build"` for a payload.
  */
-export async function createLink(input) {
+export async function createLink(input, { createdAt } = {}) {
   if (typeof input === 'string') input = JSON.parse(input);
   const isPlan = planFormat.isPlan(input);
   const payload = toPayload(input);
@@ -2403,7 +2425,7 @@ export async function createLink(input) {
   } catch (error) {
     throw isPlan ? inPlanTerms(error) : error;
   }
-  const fragment = await codec.encode(project, view).catch((error) => {
+  const fragment = await codec.encode(project, view, { createdAt }).catch((error) => {
     if (error.code === 'too-large')
       error.message += ` It needs ${error.length} of ${error.limit} characters; shorten or drop descriptions and merge small activities.`;
     throw error;
