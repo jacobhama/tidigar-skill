@@ -659,6 +659,16 @@ const scope = { crypto: globalThis.crypto };
         group,
         resolution,
         timelineScaleRows,
+        timelineShowWeeks: booleanValue(
+          source.timelineShowWeeks,
+          `${path}.timelineShowWeeks`,
+          true,
+        ),
+        timelineShowQuarters: booleanValue(
+          source.timelineShowQuarters,
+          `${path}.timelineShowQuarters`,
+          true,
+        ),
         timelineShowToday: booleanValue(
           source.timelineShowToday,
           `${path}.timelineShowToday`,
