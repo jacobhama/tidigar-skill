@@ -154,6 +154,9 @@ takes its model default, and encoders SHOULD leave defaults out.
 `flowArrows` is `curved` (default) or `right-angle`; `flowShapes` is `capsules`
 (default) or `flowchart`. They preserve the Flow arrow and node appearance.
 
+`flowGroupMilestones` is a boolean with default `false`; `true` places Flow
+milestones in a separate leading lane.
+
 `hideUnconnectedActivities` is a boolean with default `false`; `true` hides
 activities without incoming or outgoing dependencies in Flow.
 

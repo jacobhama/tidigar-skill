@@ -710,6 +710,11 @@ const scope = { crypto: globalThis.crypto };
           `${path}.hideUnconnectedActivities`,
           false,
         ),
+        flowGroupMilestones: booleanValue(
+          source.flowGroupMilestones,
+          `${path}.flowGroupMilestones`,
+          false,
+        ),
         timelineActivityRows,
         hideTimelineLabels,
         timelineMilestoneMode,
