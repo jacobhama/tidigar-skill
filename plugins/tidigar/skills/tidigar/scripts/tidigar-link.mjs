@@ -102,6 +102,8 @@ const scope = { crypto: globalThis.crypto };
     'view.timelineWeekDays': Object.freeze([...WEEK_DAY_MODES]),
     'view.timelineDependencyArrows': Object.freeze([...DEPENDENCY_ARROW_MODES]),
     'view.flowDirection': Object.freeze([...FLOW_DIRECTIONS]),
+    'view.flowArrows': Object.freeze(['curved', 'right-angle']),
+    'view.flowShapes': Object.freeze(['capsules', 'flowchart']),
   });
   const MAX_DIMENSIONS = 20;
   const MAX_OPTIONS = 100;
@@ -637,6 +639,14 @@ const scope = { crypto: globalThis.crypto };
       const flowDirection = source.flowDirection === undefined ? 'auto' : source.flowDirection;
       if (!FLOW_DIRECTIONS.has(flowDirection))
         invalid(`${path}.flowDirection`, 'has an unsupported value');
+      const flowArrows = source.flowArrows === undefined ? 'curved' : source.flowArrows;
+      const flowShapes = source.flowShapes === undefined ? 'capsules' : source.flowShapes;
+      for (const [field, value] of [
+        ['flowArrows', flowArrows],
+        ['flowShapes', flowShapes],
+      ])
+        if (!ENUM_VALUES[`view.${field}`].includes(value))
+          invalid(`${path}.${field}`, 'has an unsupported value');
       const timelineStart =
         source.timelineStart === undefined ? defaultStart : source.timelineStart;
       const timelineEnd = source.timelineEnd === undefined ? defaultEnd : source.timelineEnd;
@@ -701,6 +711,8 @@ const scope = { crypto: globalThis.crypto };
         timelineWeekDays,
         timelineDependencyArrows,
         flowDirection,
+        flowArrows,
+        flowShapes,
         timelineStart,
         timelineEnd,
         listColumns: normalizeColumns(

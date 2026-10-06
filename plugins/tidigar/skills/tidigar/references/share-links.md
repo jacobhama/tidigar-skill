@@ -149,6 +149,9 @@ Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out
 takes its model default, and encoders SHOULD leave defaults out.
 `presentationStyle` selects `standard` (the default), `minimal`, `airy`, or `contrast`, in both light and dark mode.
+`flowArrows` is `curved` (default) or `right-angle`; `flowShapes` is `capsules`
+(default) or `flowchart`. They preserve the Flow arrow and node appearance.
+
 `hideUnconnectedActivities` is a boolean with default `false`; `true` hides
 activities without incoming or outgoing dependencies in Flow.
 
