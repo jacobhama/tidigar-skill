@@ -140,7 +140,7 @@ except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 
 | Field                            | Value in a link                                      |
 | -------------------------------- | ---------------------------------------------------- |
-| `row`, `col`, `color`, `group`   | dimension index, or `""` for none                    |
+| `row`, `col`, `color`, `group`, `flowGroup`   | dimension index, or `""` for none                    |
 | `filters`                        | object: dimension index as key → option number       |
 | `colorOverrides`                 | object: `"<dimension index>.<option index>"` → color |
 | `listColumns`, `listColumnOrder` | `"title"`, `"start"`, `"end"` or a dimension index   |
@@ -149,6 +149,8 @@ Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out
 takes its model default, and encoders SHOULD leave defaults out.
 `presentationStyle` selects `standard` (the default), `minimal`, `airy`, or `contrast`, in both light and dark mode.
+`flowGroup` is a dimension index or `""` (default) for no Flow swimlanes.
+
 `flowArrows` is `curved` (default) or `right-angle`; `flowShapes` is `capsules`
 (default) or `flowchart`. They preserve the Flow arrow and node appearance.
 

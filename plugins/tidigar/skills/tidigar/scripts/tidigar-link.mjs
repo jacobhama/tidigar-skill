@@ -597,6 +597,11 @@ const scope = { crypto: globalThis.crypto };
       const row = normalizeDimensionReference(source.row, dimensions, `${path}.row`);
       const col = normalizeDimensionReference(source.col, dimensions, `${path}.col`);
       const color = normalizeDimensionReference(source.color, dimensions, `${path}.color`);
+      const flowGroup = normalizeDimensionReference(
+        source.flowGroup,
+        dimensions,
+        `${path}.flowGroup`,
+      );
       const group = normalizeDimensionReference(source.group, dimensions, `${path}.group`);
       const resolution = source.resolution === undefined ? 'month' : source.resolution;
       if (!RESOLUTIONS.has(resolution)) invalid(`${path}.resolution`, 'has an unsupported value');
@@ -713,6 +718,7 @@ const scope = { crypto: globalThis.crypto };
         flowDirection,
         flowArrows,
         flowShapes,
+        flowGroup,
         timelineStart,
         timelineEnd,
         listColumns: normalizeColumns(
@@ -1115,7 +1121,7 @@ const scope = { crypto: globalThis.crypto };
   const MAX_INFLATED_BYTES = 262144;
   const DAY = 86400000;
   const OMITTED_VIEW_FIELDS = new Set(['id', 'projectId', 'name', 'hideTimelineLabels']);
-  const DIMENSION_FIELDS = new Set(['row', 'col', 'color', 'group']);
+  const DIMENSION_FIELDS = new Set(['row', 'col', 'color', 'group', 'flowGroup']);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
 
   class ShareLinkError extends Error {
