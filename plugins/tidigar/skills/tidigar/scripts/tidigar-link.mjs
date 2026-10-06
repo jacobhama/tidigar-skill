@@ -715,6 +715,11 @@ const scope = { crypto: globalThis.crypto };
           `${path}.flowGroupMilestones`,
           false,
         ),
+        hideEmptyFlowGroups: booleanValue(
+          source.hideEmptyFlowGroups,
+          `${path}.hideEmptyFlowGroups`,
+          false,
+        ),
         timelineActivityRows,
         hideTimelineLabels,
         timelineMilestoneMode,
