@@ -157,6 +157,9 @@ takes its model default, and encoders SHOULD leave defaults out.
 `hideEmptyFlowGroups` is a boolean with default `false`; `true` hides Flow
 dimension lanes without visible activities.
 
+`flowHideDates` is a boolean with default `false`; `true` hides activity and
+milestone dates in Flow and image exports, preserving the plan’s dates.
+
 `flowGroupMilestones` is a boolean with default `false`; `true` places Flow
 milestones in a separate leading lane.
 

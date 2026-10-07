@@ -720,6 +720,7 @@ const scope = { crypto: globalThis.crypto };
           `${path}.hideEmptyFlowGroups`,
           false,
         ),
+        flowHideDates: booleanValue(source.flowHideDates, `${path}.flowHideDates`, false),
         timelineActivityRows,
         hideTimelineLabels,
         timelineMilestoneMode,
