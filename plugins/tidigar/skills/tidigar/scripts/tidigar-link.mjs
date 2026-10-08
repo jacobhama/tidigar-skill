@@ -901,7 +901,8 @@ const scope = { crypto: globalThis.crypto };
   }
 
   const CALENDAR_METADATA_FORMAT = 'tidigar-calendar-notes';
-  const CALENDAR_METADATA_VERSION = 1;
+  const CALENDAR_METADATA_VERSION = 2;
+  const CALENDAR_METADATA_SECTIONS = new Set(['manifest', 'view', 'dimension']);
 
   function exactKeys(value, expected, path) {
     const actual = Object.keys(value).sort();
@@ -910,36 +911,36 @@ const scope = { crypto: globalThis.crypto };
       invalid(path, 'contains unsupported fields');
   }
 
-  function normalizeOrder(value, path) {
-    const order = requireArray(value, path);
-    const seen = new Set();
-    return order.map((id, index) => {
-      const normalized = uuidValue(id, `${path}[${index}]`);
-      if (seen.has(normalized)) invalid(path, 'contains duplicate IDs');
-      seen.add(normalized);
-      return normalized;
-    });
+  function oneRecord(records, recordId, path) {
+    const matches = recordId ? records.filter((record) => record.id === recordId) : records;
+    if (matches.length !== 1) invalid(path, 'must identify exactly one record');
+    return matches[0];
   }
 
-  function serializeCalendarMetadata(project, section, viewId) {
+  /*
+   * The Notes envelope of a calendar metadata event (ADR-272). The manifest
+   * event holds the manifest without its dimensions; each dimension and each
+   * shared view owns an event. Record order lives in each event's URL rank.
+   */
+  function serializeCalendarMetadata(project, section, recordId) {
     const normalized = normalizeProject(project);
     let payload;
     if (section === 'manifest') {
-      payload = {
-        manifest: JSON.parse(serializeManifest(normalized.manifest)),
-        itemOrder: normalized.items.map((item) => item.id),
-        milestoneOrder: normalized.milestones.map((milestone) => milestone.id),
-        periodOrder: normalized.periodIndicators.map((indicator) => indicator.id),
-        viewOrder: normalized.sharedViews.map((view) => view.id),
-      };
+      const { dimensions: _dimensions, ...manifest } = JSON.parse(
+        serializeManifest(normalized.manifest),
+      );
+      payload = { manifest };
     } else if (section === 'view') {
-      const matches = viewId
-        ? normalized.sharedViews.filter((view) => view.id === viewId)
-        : normalized.sharedViews;
-      if (matches.length !== 1) invalid('viewId', 'must identify exactly one shared view');
-      payload = { view: JSON.parse(serializeViews(matches, normalized.manifest))[0] };
+      const view = oneRecord(normalized.sharedViews, recordId, 'viewId');
+      payload = { view: JSON.parse(serializeViews([view], normalized.manifest))[0] };
+    } else if (section === 'dimension') {
+      payload = {
+        dimension: JSON.parse(
+          JSON.stringify(oneRecord(normalized.manifest.dimensions, recordId, 'dimensionId')),
+        ),
+      };
     } else {
-      invalid('section', 'must be manifest or view');
+      invalid('section', 'must be manifest, view or dimension');
     }
     return JSON.stringify({
       format: CALENDAR_METADATA_FORMAT,
@@ -949,6 +950,11 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
+  /**
+   * The payload of a calendar Notes envelope: `{ manifest }` with empty
+   * `dimensions`, `{ dimension }` or `{ view }`. A view needs the manifest
+   * with its dimensions as context.
+   */
   function deserializeCalendarMetadata(value, section, contextInput) {
     const source = requireRecord(parseJsonInput(value, 'calendarMetadata'), 'calendarMetadata');
     exactKeys(source, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
@@ -956,30 +962,27 @@ const scope = { crypto: globalThis.crypto };
       invalid('calendarMetadata.format', 'unsupported');
     if (source.version !== CALENDAR_METADATA_VERSION)
       invalid('calendarMetadata.version', 'unsupported');
+    if (!CALENDAR_METADATA_SECTIONS.has(section))
+      invalid('section', 'must be manifest, view or dimension');
     if (source.section !== section) invalid('calendarMetadata.section', 'unexpected section');
     const payload = requireRecord(source.payload, 'calendarMetadata.payload');
+    exactKeys(payload, [section], 'calendarMetadata.payload');
     if (section === 'manifest') {
-      exactKeys(
-        payload,
-        ['manifest', 'itemOrder', 'milestoneOrder', 'periodOrder', 'viewOrder'],
-        'calendarMetadata.payload',
-      );
-      const manifest = deserializeManifest(payload.manifest);
-      const itemOrder = normalizeOrder(payload.itemOrder, 'calendarMetadata.itemOrder');
-      const milestoneOrder = normalizeOrder(
-        payload.milestoneOrder,
-        'calendarMetadata.milestoneOrder',
-      );
-      const periodOrder = normalizeOrder(payload.periodOrder, 'calendarMetadata.periodOrder');
-      const viewOrder = normalizeOrder(payload.viewOrder, 'calendarMetadata.viewOrder');
-      return { manifest, itemOrder, milestoneOrder, periodOrder, viewOrder };
+      const manifest = requireRecord(payload.manifest, 'calendarMetadata.payload.manifest');
+      if (hasOwn(manifest, 'dimensions'))
+        invalid('calendarMetadata.payload.manifest.dimensions', 'belong to dimension events');
+      return { manifest: deserializeManifest({ ...manifest, dimensions: [] }) };
     }
-    if (section === 'view') {
-      exactKeys(payload, ['view'], 'calendarMetadata.payload');
-      const views = deserializeViews(JSON.stringify([payload.view]), contextInput);
-      return { view: views[0] };
+    if (section === 'dimension') {
+      const [dimension] = normalizeDimensions(
+        [payload.dimension],
+        makeIdRegistry(),
+        'calendarMetadata.payload.dimension',
+      );
+      return { dimension };
     }
-    invalid('section', 'must be manifest or view');
+    const views = deserializeViews(JSON.stringify([payload.view]), contextInput);
+    return { view: views[0] };
   }
 
   /** Encode a single project wrapper used by downloaded Tidigar files. */
