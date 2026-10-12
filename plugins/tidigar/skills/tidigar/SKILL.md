@@ -40,11 +40,12 @@ You write records with real dates and names. Tidigar adds IDs, colors and view s
 
 ## Make a link
 
-1. Work out the plan: activities with start and end dates, dimensions such as team or phase, dependencies and milestones. Tell the user which dates you assumed.
-2. Write it as a plan: one JSON object, described below.
-3. Build the link from it: `node tidigar-link.mjs plan.json`, or `python3 tidigar_link.py plan.json` with the Python builder.
-4. Compare the summary it prints against the request, and fix the plan if it differs. When it prints an error, fix the record it names and build again.
-5. Answer with the link, `https://open.tidigar.com/s#s=1.…`, as a clickable link, exactly as printed.
+1. Work out the plan: activities with start and end dates, dimensions, dependencies and milestones. Tell the user which dates you assumed.
+2. Unless the user says otherwise, give the plan at least two dimensions: first who does the work, such as Team, then where it stands, such as Phase or Status, with options in their order. The first groups the timeline and forms the board's rows; the second forms the board's columns.
+3. Write it as a plan: one JSON object, described below.
+4. Build the link from it: `node tidigar-link.mjs plan.json`, or `python3 tidigar_link.py plan.json` with the Python builder.
+5. Compare the summary it prints against the request, and fix the plan if it differs. When it prints an error, fix the record it names and build again.
+6. Answer with the link, `https://open.tidigar.com/s#s=1.…`, as a clickable link, exactly as printed.
 
 ## Share URL integrity
 
@@ -59,12 +60,12 @@ The output of the serializer is authoritative, and the whole roadmap lives in th
 ```json
 {
   "name": "Website launch",
-  "dimensions": { "Team": ["Design", "Development"] },
+  "dimensions": { "Team": ["Design", "Development"], "Phase": ["Plan", "Build"] },
   "activities": [
-    { "title": "Requirements", "start": "2026-03-02", "end": "2026-03-13", "progress": 100, "values": { "Team": "Design" } },
-    { "title": "Design", "start": "2026-03-16", "end": "2026-04-03", "progress": 50, "values": { "Team": "Design" }, "dependsOn": ["Requirements"] },
-    { "title": "Build", "start": "2026-04-06", "end": "2026-05-15", "values": { "Team": "Development" }, "dependsOn": ["Design"] },
-    { "title": "Test", "start": "2026-05-18", "end": "2026-05-29", "values": { "Team": "Development" }, "dependsOn": ["Build"] }
+    { "title": "Requirements", "start": "2026-03-02", "end": "2026-03-13", "progress": 100, "values": { "Team": "Design", "Phase": "Plan" } },
+    { "title": "Design", "start": "2026-03-16", "end": "2026-04-03", "progress": 50, "values": { "Team": "Design", "Phase": "Plan" }, "dependsOn": ["Requirements"] },
+    { "title": "Build", "start": "2026-04-06", "end": "2026-05-15", "values": { "Team": "Development", "Phase": "Build" }, "dependsOn": ["Design"] },
+    { "title": "Test", "start": "2026-05-18", "end": "2026-05-29", "values": { "Team": "Development", "Phase": "Build" }, "dependsOn": ["Build"] }
   ],
   "milestones": [{ "title": "Launch", "date": "2026-06-01", "dependsOn": ["Test"] }]
 }
@@ -77,12 +78,12 @@ The output of the serializer is authoritative, and the whole roadmap lives in th
 - `dependsOn` names activities by title, or by 0-based index where titles repeat.
 - Titles are at most 180 characters; milestones and periods need one.
 - `periods`: `{ "title", "start", "end", "color", "vacation" }`.
-- `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and `columns` take a dimension's name; `start` and `end` set the timeline's range. Left out, the link opens a timeline over the plan's dates, grouped and colored by the first dimension.
+- `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and `columns` take a dimension's name; `start` and `end` set the timeline's range. Left out, the link opens a timeline over the plan's dates, grouped and colored by the first dimension, and its board has the first dimension as rows and the second as columns.
 - A link holds roughly 20 to 30 activities. When a plan is too large, shorten descriptions and merge small activities, and tell the user what you left out. Never cut a link short.
 
-The example opens as a timeline grouped and colored by team:
+The example opens as a timeline grouped and colored by team, and its board has a column per phase:
 
-https://open.tidigar.com/s#s=1.RZDNTsMwEIRfBc15K9n5pTkiuHGCShysHEy6aS0ldomdIlT13XHcFCwfVv5mZ2d9gUWDD_70JvDDoGfbHUH4QZOJrCKMaJTCjvUIisUze3OwUVD0ddf3aGl5O_PgTiPbEIGsdF5otPEQTOp-46_ZTLwIPKgSJCUBJIUgJdubxc22Lkg-LqxMiJRI-Gk2wx60LSnfLjTCrL337tjHuTKvV9sVZimATwFe17VkKUnlCTg0F5wNf8ftgxl5MJZj-s4NbkIjCIfJzadU3fF70FOI8uVjNiLfiAz_8MXu_1C8EtfrLw
+https://open.tidigar.com/s#s=1.XZDLasMwEEV_pcx6ApL8arwM7a6L0Aa6MFqozjgRyHJqySkl5N8ryW76AC0Gnbl37swFLNTwSm9Oe7ozarLtERA-oRZMlAg91E0DO1I9YCgeyOmDDQ15V7VdBxLj35nMcOrJ-gB4qbJcgZQRbY_KURJujfon20za7P8IJIJO457pfdIjRUcHWDLkHAGQM4YNRy7nqXOSKkd-H2mxQGyY_OW_LjBbRx6wQBHIrN-RC3F5Vi3mNyxSEJeCPC334AXHJktggPoCZ00f4Wxe92S0DRtCO5hhhJohHMZhOqXqG794NfrQHi-6YtmKCfiBj3Z_Q-FxuF6_AA
 
 ## The reference module
 
