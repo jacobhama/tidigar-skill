@@ -87,6 +87,9 @@ const scope = { crypto: globalThis.crypto };
   });
   const currentViewValue = (field, value) => RENAMED_VIEW_VALUES[field][value] ?? value;
   const PROGRESS_VALUES = new Set([0, 25, 50, 75, 100]);
+  // How far into another activity one may start; 100, after its end, is the
+  // default and is never stored.
+  const START_AFTER_VALUES = new Set([0, 25, 50, 75]);
   // Allowed values of enumerated fields, published read-only so the model
   // specification test can compare them with docs/model-spec.md.
   const ENUM_VALUES = Object.freeze({
@@ -96,7 +99,13 @@ const scope = { crypto: globalThis.crypto };
     'view.resolution': Object.freeze([...RESOLUTIONS]),
     'view.timelineScaleRows': Object.freeze([1, 2, 3]),
     'view.textMode': Object.freeze([...TEXT_MODES]),
-    'view.presentationStyle': Object.freeze(['standard', 'minimal', 'airy', 'contrast']),
+    'view.presentationStyle': Object.freeze([
+      'standard',
+      'minimal',
+      'airy',
+      'contrast',
+      'terminal',
+    ]),
     'view.timelineActivityRows': Object.freeze([...ACTIVITY_ROW_MODES]),
     'view.timelineMilestoneMode': Object.freeze([...MILESTONE_MODES]),
     'view.timelineWeekDays': Object.freeze([...WEEK_DAY_MODES]),
@@ -454,6 +463,38 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
+  // The share of another activity that has passed when one may start on it:
+  // an object of predecessor IDs to 0, 25, 50 or 75. An entry outlives no
+  // dependency: one for an ID outside `dependsOn` is dropped.
+  function normalizeStartAfter(value, dependsOn, path) {
+    if (value === undefined) return {};
+    const source = requireRecord(value, path);
+    for (const [id, percent] of Object.entries(source))
+      if (!START_AFTER_VALUES.has(percent))
+        invalid(`${path}.${id}`, 'must be one of 0, 25, 50, or 75');
+    // Entries follow the order of `dependsOn`, so the field has one spelling.
+    return Object.fromEntries(dependsOn.filter((id) => id in source).map((id) => [id, source[id]]));
+  }
+
+  /**
+   * The first day an activity may start when it waits for `percent` of
+   * `parent`: the day after its end for 100, else the day after that share
+   * of its days, rounded up, has passed. With a work calendar the share is
+   * counted in work days. Dates are UTC midnight timestamps.
+   */
+  function startThreshold(parent, percent = 100, calendar = null) {
+    const start = dateTimestamp(parent.start);
+    const after = dayAfter(parent.end);
+    if (percent >= 100) return after;
+    const length = calendar
+      ? calendar.durationOf(start, after - DAY)
+      : Math.round((after - start) / DAY);
+    const days = Math.ceil((length * percent) / 100);
+    if (!days) return start;
+    const passed = calendar ? calendar.lastWorkDay(start, days) + DAY : start + days * DAY;
+    return Math.min(passed, after);
+  }
+
   // An activity waits for other activities and for fixed milestones,
   // events on a set date that wait for nothing themselves.
   function validateItemDependencies(items, path = 'items', milestones = []) {
@@ -479,18 +520,31 @@ const scope = { crypto: globalThis.crypto };
     for (const item of items) visit(item);
 
     // Tidigar dependencies are finish-to-start with one whole day between
-    // records; a fixed milestone lets work start on its own date.
-    // Deserialization validates this contract and never moves user dates as
-    // a side effect.
+    // records; a fixed milestone lets work start on its own date. An
+    // activity that starts after part of another starts no earlier than that
+    // one: editors place it by `startThreshold`, but the stored contract does
+    // not depend on the work calendar, so a new vacation never invalidates a
+    // project. Deserialization validates this contract and never moves user
+    // dates as a side effect.
     for (const item of items) {
       for (const dependency of item.dependsOn) {
         const point = fixed.get(dependency);
         if (point) {
+          if (item.startAfter?.[dependency] !== undefined)
+            invalid(`${path}.${item.id}.startAfter`, `must not name fixed milestone ${dependency}`);
           if (item.start < point.date)
             invalid(`${path}.${item.id}.start`, `must not be before fixed milestone ${dependency}`);
           continue;
         }
         const parent = byId.get(dependency);
+        if (item.startAfter?.[dependency] !== undefined) {
+          if (item.start < parent.start)
+            invalid(
+              `${path}.${item.id}.start`,
+              `must not be before dependency ${dependency} starts`,
+            );
+          continue;
+        }
         if (dateTimestamp(item.start) < dayAfter(parent.end))
           invalid(
             `${path}.${item.id}.start`,
@@ -522,7 +576,11 @@ const scope = { crypto: globalThis.crypto };
       if (start > end) invalid(path, 'start must not be after end');
       const values = normalizeValues(source.values, context, `${path}.values`);
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
-      return { id, projectId, title, description, progress, start, end, values, dependsOn };
+      const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
+      const record = { id, projectId, title, description, progress, start, end, values, dependsOn };
+      // Only an activity that overlaps another carries the field.
+      if (Object.keys(startAfter).length) record.startAfter = startAfter;
+      return record;
     });
     // A whole project checks dependencies once its milestones are known.
     if (!deferDependencies) validateItemDependencies(items);
@@ -1089,6 +1147,7 @@ const scope = { crypto: globalThis.crypto };
     enumValues: ENUM_VALUES,
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
+    startThreshold,
     normalizeProject,
     copyAsNewProject,
     normalizeManifest,
@@ -1462,8 +1521,12 @@ const scope = { crypto: globalThis.crypto };
               item.progress,
               trimZeros(manifest.dimensions.map((dimension) => option(item.values[dimension.id]))),
               dependencies(item.dependsOn),
+              trimTail(
+                item.dependsOn.map((id) => item.startAfter?.[id] ?? 100),
+                item.dependsOn.map(() => 100),
+              ),
             ],
-            [null, null, null, '', 0, [], []],
+            [null, null, null, '', 0, [], [], []],
           ),
         );
       if (project.milestones.length)
@@ -1650,8 +1713,18 @@ const scope = { crypto: globalThis.crypto };
           schedule: payload.w === undefined ? 'calendar-days' : payload.w === 1 ? 'work-days' : '',
         },
         items: packedItems.map((entry, index) => {
-          const [title, start, length, description = '', progress = 0, values, dependsOn] = entry;
+          const [title, start, length, description = '', progress = 0, values, dependsOn, parts] =
+            entry;
           const choices = list(values);
+          const predecessorIds = list(dependsOn).map((position) => at(predecessors, position));
+          const shares = list(parts);
+          if (shares.length > predecessorIds.length)
+            fail('invalid', 'The share link refers to a missing entry.');
+          const startAfter = Object.fromEntries(
+            shares
+              .map((share, position) => [predecessorIds[position], share])
+              .filter(([, share]) => share !== 100),
+          );
           if (choices.length > dimensions.length)
             fail('invalid', 'The share link refers to a missing entry.');
           return {
@@ -1670,7 +1743,8 @@ const scope = { crypto: globalThis.crypto };
                 ])
                 .filter(([, id]) => id),
             ),
-            dependsOn: list(dependsOn).map((position) => at(predecessors, position)),
+            dependsOn: predecessorIds,
+            ...(Object.keys(startAfter).length ? { startAfter } : {}),
           };
         }),
         sharedViews: list(payload.v).map((packed, index) =>
@@ -1740,8 +1814,13 @@ const scope = { crypto: globalThis.crypto };
           ...project.milestones.filter((point) => point.fixed).map((point) => point.id),
         ]);
         project.items = project.items.filter((item) => kept.has(item.id));
-        for (const record of [...project.items, ...project.milestones])
+        for (const record of [...project.items, ...project.milestones]) {
           record.dependsOn = record.dependsOn.filter((id) => kept.has(id));
+          if (!record.startAfter) continue;
+          for (const id of Object.keys(record.startAfter))
+            if (!kept.has(id)) delete record.startAfter[id];
+          if (!Object.keys(record.startAfter).length) delete record.startAfter;
+        }
       }
       if (options.withoutDescriptions) {
         project.manifest.description = '';

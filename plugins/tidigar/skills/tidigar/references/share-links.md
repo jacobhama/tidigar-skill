@@ -68,19 +68,19 @@ Dates are whole **days from January 1 of `y`**; negative values are earlier.
 A length is the number of days from start to the inclusive end, so `0` is a
 single day. Colors are six hexadecimal digits without `#`.
 
-| Key | Holds        | Required | Value                                                  |
-| --- | ------------ | -------- | ------------------------------------------------------ |
-| `c` | Link created | no | UTC ISO 8601 `YYYY-MM-DDTHH:mm:ssZ`, valid date and time |
-| `n` | Roadmap name | yes      | text, 1–100 characters, not blank                      |
-| `y` | Year         | yes      | integer 1900–2200; the base of every date              |
-| `d` | Description  | no       | text, max 500 characters; default `""`                 |
-| `w` | Work days    | no       | `1` plans in work days; absent plans in calendar days  |
-| `m` | Dimensions   | no       | array of `[name, options]`, options `[name, color]`    |
-| `i` | Activities   | no       | array of activity tuples                               |
-| `s` | Milestones   | no       | array of milestone tuples                              |
-| `p` | Period bands | no       | array of period tuples                                 |
-| `v` | Saved views  | no       | array of view objects with a `name`                    |
-| `o` | Initial view | no       | one view object without `name`; default view if absent |
+| Key | Holds        | Required | Value                                                    |
+| --- | ------------ | -------- | -------------------------------------------------------- |
+| `c` | Link created | no       | UTC ISO 8601 `YYYY-MM-DDTHH:mm:ssZ`, valid date and time |
+| `n` | Roadmap name | yes      | text, 1–100 characters, not blank                        |
+| `y` | Year         | yes      | integer 1900–2200; the base of every date                |
+| `d` | Description  | no       | text, max 500 characters; default `""`                   |
+| `w` | Work days    | no       | `1` plans in work days; absent plans in calendar days    |
+| `m` | Dimensions   | no       | array of `[name, options]`, options `[name, color]`      |
+| `i` | Activities   | no       | array of activity tuples                                 |
+| `s` | Milestones   | no       | array of milestone tuples                                |
+| `p` | Period bands | no       | array of period tuples                                   |
+| `v` | Saved views  | no       | array of view objects with a `name`                      |
+| `o` | Initial view | no       | one view object without `name`; default view if absent   |
 
 New sharing links carry `c`, the instant the link was created, for example
 `2026-10-05T12:30:00Z`. Readers preserve it as `manifest.shareLinkCreatedAt`
@@ -96,7 +96,7 @@ Missing lists are empty. At most 20 dimensions with 100 options each.
 ### Activity tuple
 
 ```text
-[title, start, length, description, progress, values, dependsOn]
+[title, start, length, description, progress, values, dependsOn, startAfter]
 ```
 
 | Position | Field         | Value                                            |
@@ -108,12 +108,19 @@ Missing lists are empty. At most 20 dimensions with 100 options each.
 | 4        | `progress`    | one of `0`, `25`, `50`, `75`, `100`; default `0` |
 | 5        | `values`      | option numbers in dimension order; default `[]`  |
 | 6        | `dependsOn`   | predecessor indices; see below                   |
+| 7        | `startAfter`  | share per predecessor; default `[]`              |
 
 Trailing default positions MAY be left out, and trailing `0` entries in
 `values` MAY be left out. A missing value and `0` mean the same: no option.
 
 A predecessor index below the number of activities refers to an activity,
-which MUST end before this activity starts. An index from the number of
+which MUST end before this activity starts, unless `startAfter` lets it start
+earlier. `startAfter` holds, in the order of `dependsOn`, how much of each
+predecessor has passed when this activity may start: `0`, `25`, `50`, `75` or
+`100`. A missing entry and `100` mean the same: after the predecessor's end;
+trailing `100` entries MAY be left out. With a share below `100` the activity
+MUST NOT start before that predecessor starts, and a fixed milestone always
+has `100`. An index from the number of
 activities upward refers to the milestone at that index minus the number of
 activities; it MUST be a fixed milestone, and this activity MUST NOT start
 before its date.
@@ -138,17 +145,17 @@ a period with `vacation` 1 has no work days; a trailing 1 MAY be left out.
 A view uses the saved-view fields of the [model specification](https://tidigar.com/docs/file-format.md#saved-view)
 except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 
-| Field                            | Value in a link                                      |
-| -------------------------------- | ---------------------------------------------------- |
-| `row`, `col`, `color`, `group`, `flowGroup`   | dimension index, or `""` for none                    |
-| `filters`                        | object: dimension index as key → option number       |
-| `colorOverrides`                 | object: `"<dimension index>.<option index>"` → color |
-| `listColumns`, `listColumnOrder` | `"title"`, `"start"`, `"end"` or a dimension index   |
+| Field                                       | Value in a link                                      |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `row`, `col`, `color`, `group`, `flowGroup` | dimension index, or `""` for none                    |
+| `filters`                                   | object: dimension index as key → option number       |
+| `colorOverrides`                            | object: `"<dimension index>.<option index>"` → color |
+| `listColumns`, `listColumnOrder`            | `"title"`, `"start"`, `"end"` or a dimension index   |
 
 Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out
 takes its model default, and encoders SHOULD leave defaults out.
-`presentationStyle` selects `standard` (the default), `minimal`, `airy`, or `contrast`, in both light and dark mode.
+`presentationStyle` selects `standard` (the default), `minimal`, `airy`, `contrast`, or `terminal`. The first four follow light and dark mode; `terminal` is always green text on black.
 `flowGroup` is a dimension index or `""` (default) for no Flow swimlanes.
 
 `flowArrows` is `curved` (default) or `right-angle`; `flowShapes` is `capsules`
