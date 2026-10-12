@@ -17,7 +17,7 @@ Follow this file exactly. A link that breaks one rule does not open, and Tidigar
 
 1. Choose how you build the link, in this order:
    - You can run Node.js, Deno or Bun and download a file, or you have the Tidigar skill: use [the reference module](#the-reference-module).
-   - You can run Python, also without internet access, as in ChatGPT: use [the Python builder](#the-python-builder). Copy it into a file exactly as written, without shortening or rewriting it.
+   - You can run Python, also without internet access, as in ChatGPT: use [the Python builder](#the-python-builder) at the end of this file. Copy it into a file exactly as written, without shortening or rewriting it.
    - You cannot run code: say so and give the plan instead. Never invent a link.
 2. Write a plan with only the fields this file describes. Do not guess a field, a value or a format; a field that is not listed does not exist.
 3. Never write the link, its `s=1.…` text, the compact payload, day offsets or option numbers yourself. Only the module or the builder writes them.
@@ -112,9 +112,36 @@ python3 tidigar_link.py --read "https://open.tidigar.com/s#s=1.…" > plan.json
 
 A plan leaves out a link's saved views and finer view settings, and the module says so when a link has them.
 
+## Show it in the chat
+
+Always give the clickable link. Where you can render HTML, you may also show the roadmap; `node tidigar-link.mjs --embed plan.json` prints this frame:
+
+```html
+<iframe src="https://embed.tidigar.com/#s=1.…" title="Website launch" width="100%" height="480" style="border:0"></iframe>
+```
+
+## More, when you need it
+
+- [Examples](https://tidigar.com/agents/examples.md): a full request, plan, output and answer, and a change to a link.
+- [llms-full.txt](https://tidigar.com/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
+
+## Reference
+
+You do not need any of these to make or change a link: the module and the Python builder already follow every rule.
+
+- [Share link specification](https://tidigar.com/docs/share-links.md): every field and limit of the payload. Read it in full before you write a payload yourself or need what a plan cannot express, such as saved views or filters.
+- [Plan schema](https://tidigar.com/schema/plan-v1.json) and [payload schema](https://tidigar.com/schema/share-link-v1.json): JSON Schema 2020-12, for validation in your own code.
+- [Example roadmaps](https://tidigar.com/examples/): ready-made plans to start from.
+
+Other formats, only when the user asks for them and never to make a link:
+
+- [Roadmaps in Markdown](https://tidigar.com/docs/markdown.md): a roadmap as text, for a repository or a document.
+- [Embed stories](https://tidigar.com/docs/stories.md): timed changes with captions on an embedded roadmap, for animated demos.
+- [Roadmap file format](https://tidigar.com/docs/file-format.md): the full model with IDs, for Tidigar's JSON and `.tidigar` files.
+
 ## The Python builder
 
-When you can run Python but not the module, for example in a sandbox without internet access, save this code as `tidigar_link.py`, exactly as written, and run it on the plan. It checks the same rules as the module, builds the same link and prints the same summary, or an error that names the rule and the record. It needs only Python 3.8 or later. The same file is at `https://tidigar.com/agents/v1/tidigar_link.py`.
+Skip this section when you use the reference module. When you can run Python but not the module, for example in a sandbox without internet access, save this code as `tidigar_link.py`, exactly as written, and run it on the plan. It checks the same rules as the module, builds the same link and prints the same summary, or an error that names the rule and the record. It needs only Python 3.8 or later. The same file is at `https://tidigar.com/agents/v1/tidigar_link.py`.
 
 ```sh
 python3 tidigar_link.py plan.json
@@ -503,27 +530,3 @@ if __name__ == "__main__" and "ipykernel" not in sys.modules:
             sys.exit(str(error))
         print(url + "\n\n" + summary(payload) + f"\n\nFragment: {len(url) - len(OPENER) - 1} of 1900 characters.")
 ```
-
-## Show it in the chat
-
-Always give the clickable link. Where you can render HTML, you may also show the roadmap; `node tidigar-link.mjs --embed plan.json` prints this frame:
-
-```html
-<iframe src="https://embed.tidigar.com/#s=1.…" title="Website launch" width="100%" height="480" style="border:0"></iframe>
-```
-
-## More, when you need it
-
-- [Examples](https://tidigar.com/agents/examples.md): a full request, plan, output and answer, and a change to a link.
-- [llms-full.txt](https://tidigar.com/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
-
-## Reference
-
-The module and the Python builder already follow these rules, so you do not need them to make or change a link. Read the share link specification in full before you write any payload yourself or use something a plan cannot express.
-
-- [Share link specification](https://tidigar.com/docs/share-links.md): every field and limit of the payload, including saved views and filters a plan cannot express.
-- [Embed stories](https://tidigar.com/docs/stories.md): timed changes with captions that play on an embedded roadmap. Only for an animated demo or tutorial.
-- [Roadmaps in Markdown](https://tidigar.com/docs/markdown.md): a roadmap as text, for a repository or a document.
-- [Roadmap file format](https://tidigar.com/docs/file-format.md): the full model with IDs, for Tidigar's JSON and `.tidigar` files.
-- [Plan schema](https://tidigar.com/schema/plan-v1.json) and [payload schema](https://tidigar.com/schema/share-link-v1.json): JSON Schema 2020-12, for validation in your own code.
-- [Example roadmaps](https://tidigar.com/examples/): ready-made plans to start from.
