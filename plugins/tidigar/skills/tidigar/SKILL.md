@@ -9,20 +9,28 @@ description: Make Tidigar roadmaps, Gantt charts and project timelines as share 
 
 This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `examples.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
 
-Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. This file is all you need to make and change links. Your answer is always a clickable link, and building one needs code execution, because the roadmap is compressed into the link.
+Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. Creating a link needs code execution, because the roadmap is compressed into the link.
+
+## Quick start: create a plan and return its link
+
+This guide and either builder are enough for a normal project plan, including activities, dimensions, dependencies and milestones. You do not need to fetch the share link specification, schemas or other documentation first. If a reference page is unavailable, continue with this guide and a builder.
+
+1. Choose the builder your tools can run:
+   - **Node.js 20+, Deno or Bun:** download [tidigar-link.mjs](https://tidigar.com/agents/v1/tidigar-link.mjs), or use the copy included in the Tidigar skill. Run `node tidigar-link.mjs plan.json`.
+   - **Python 3.8+:** download [tidigar_link.py](https://tidigar.com/agents/v1/tidigar_link.py). If downloading is unavailable, copy [the Python builder below](#the-python-builder) exactly into `tidigar_link.py`; it runs without internet access or extra packages. Run `python3 tidigar_link.py plan.json`. For a notebook, use the calls shown in that section.
+2. Write `plan.json` using the [plan example and fields below](#plan). Use the user's language for names and titles. Choose reasonable dates and durations when unspecified, and state those assumptions in your answer.
+3. Unless the user says otherwise, give the plan at least two dimensions: first who does the work, such as Team, then where it stands, such as Phase or Status, with options in their order. The first groups the timeline and forms the board's rows; the second forms the board's columns.
+4. Run the chosen builder. If it reports an error, fix the record it names and run it again.
+5. Compare the printed summary with the request: check dates, activities, dimensions, dependencies and milestones.
+6. Answer with the exact generated URL as a clickable Markdown link, followed by your date assumptions. The link opens the plan as an editable timeline in Tidigar.
+
+If you cannot run either builder, explain that limitation and give the plan as a fallback. Never invent a link or claim you verified one without running a builder.
 
 ## Rules
 
-Follow this file exactly. A link that breaks one rule does not open, and Tidigar cannot repair it.
-
-1. Choose how you build the link, in this order:
-   - You can run Node.js, Deno or Bun and download a file, or you have the Tidigar skill: use [the reference module](#the-reference-module).
-   - You can run Python, also without internet access, as in ChatGPT: use [the Python builder](#the-python-builder) at the end of this file. Copy it into a file exactly as written, without shortening or rewriting it.
-   - You cannot run code: say so and give the plan instead. Never invent a link.
-2. Write a plan with only the fields this file describes. Do not guess a field, a value or a format; a field that is not listed does not exist.
-3. Never write the link, its `s=1.…` text, the compact payload, day offsets or option numbers yourself. Only the module or the builder writes them.
-4. Read the summary they print and compare it with the request before you answer.
-5. When the user wants something a plan cannot express, read the [share link specification](https://tidigar.com/docs/share-links.md) first and follow every rule in it. Never fill a gap from memory.
+- Use only the plan fields described below. Owners, status and categories are dimensions, set through `values`.
+- Only a builder writes the link, its `s=1.…` text, the compact payload, day offsets and option numbers.
+- Read the [share link specification](https://tidigar.com/docs/share-links.md) only when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, deliver the supported part and explain what you left out.
 
 ## The model
 
@@ -37,15 +45,6 @@ A roadmap is a handful of records. Everything Tidigar shows is a view of them.
 - **View**: how the roadmap is shown. `timeline` is the Gantt chart, `grid` a board, `list` a table and `flow` the dependency chart, each arranged by dimensions. A link opens in one view.
 
 You write records with real dates and names. Tidigar adds IDs, colors and view settings.
-
-## Make a link
-
-1. Work out the plan: activities with start and end dates, dimensions, dependencies and milestones. Tell the user which dates you assumed.
-2. Unless the user says otherwise, give the plan at least two dimensions: first who does the work, such as Team, then where it stands, such as Phase or Status, with options in their order. The first groups the timeline and forms the board's rows; the second forms the board's columns.
-3. Write it as a plan: one JSON object, described below.
-4. Build the link from it: `node tidigar-link.mjs plan.json`, or `python3 tidigar_link.py plan.json` with the Python builder.
-5. Compare the summary it prints against the request, and fix the plan if it differs. When it prints an error, fix the record it names and build again.
-6. Answer with the link, `https://open.tidigar.com/s#s=1.…`, as a clickable link, exactly as printed.
 
 ## Share URL integrity
 
@@ -90,7 +89,7 @@ https://open.tidigar.com/s#s=1.XZDLasMwEEV_pcx6ApL8arwM7a6L0Aa6MFqozjgRyHJqySkl5
 `https://tidigar.com/agents/v1/tidigar-link.mjs` is the code Tidigar itself uses to validate and encode links, as one file for Node.js 20 or later, Deno or Bun. It runs entirely on your machine.
 
 ```sh
-curl -sO https://tidigar.com/agents/v1/tidigar-link.mjs
+curl -fSL -o tidigar-link.mjs https://tidigar.com/agents/v1/tidigar-link.mjs
 node tidigar-link.mjs plan.json
 ```
 
