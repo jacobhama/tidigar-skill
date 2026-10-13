@@ -9,7 +9,7 @@ description: Make Tidigar roadmaps, Gantt charts and project timelines as share 
 
 This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `example_sharelink.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
 
-Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. Creating a link needs code execution, because the roadmap is compressed into the link.
+Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. Prefer the JavaScript or Python builder to create the compressed link. If you cannot download or execute either builder, you may generate the link yourself by following the published [share link specification](https://tidigar.com/agents/docs/share-links.md).
 
 ## Quick start: create a plan and return its link
 
@@ -24,13 +24,13 @@ This guide and either builder are enough for a normal project plan, including ac
 5. Compare the printed summary with the request: check dates, activities, dimensions, dependencies and milestones.
 6. Answer with the exact generated URL as a clickable Markdown link, followed by your date assumptions. The link opens the plan as an editable timeline in Tidigar.
 
-If you cannot run either builder, explain that limitation and give the plan as a fallback. Never invent a link or claim you verified one without running a builder.
+If you cannot download or execute the JavaScript or Python builder, you may generate the link yourself from the published share link specification. Read it in full and follow its payload, compression, encoding and length rules. State any verification you could not perform; do not claim a link was tested unless you actually tested it. If you cannot produce a link that follows the specification, explain the limitation and give the plan as a fallback.
 
 ## Rules
 
 - Use only the plan fields described below. Owners, status and categories are dimensions, set through `values`.
-- Only a builder writes the link, its `s=1.…` text, the compact payload, day offsets and option numbers.
-- Read the [share link specification](https://tidigar.com/agents/docs/share-links.md) only when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, deliver the supported part and explain what you left out.
+- Prefer a builder for the link, its `s=1.…` text, the compact payload, day offsets and option numbers. When you cannot download or execute either builder, you may write these yourself according to the published specification.
+- Read the [share link specification](https://tidigar.com/agents/docs/share-links.md) when generating a link yourself or when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, use a builder for the supported part when possible, or give the plan as a fallback, and explain what you left out.
 
 ## The model
 
