@@ -11,7 +11,7 @@ implement the formats it describes, in any software, without asking.
 
 The keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are normative.
 The roadmap model, its field rules and limits are defined in the
-[Tidigar Roadmap Interoperability Specification](https://tidigar.com/docs/file-format.md); this document
+[Tidigar Roadmap Interoperability Specification](https://tidigar.com/agents/docs/file-format.md); this document
 only defines the compact link encoding.
 
 Links are shared through the public opener:
@@ -142,7 +142,7 @@ a period with `vacation` 1 has no work days; a trailing 1 MAY be left out.
 
 ### View object
 
-A view uses the saved-view fields of the [model specification](https://tidigar.com/docs/file-format.md#saved-view)
+A view uses the saved-view fields of the [model specification](https://tidigar.com/agents/docs/file-format.md#saved-view)
 except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 
 | Field                                       | Value in a link                                      |
@@ -285,13 +285,13 @@ the payload, and `--embed` also prints embed code. As a module it exports
 in its address follows the link format version.
 
 JSON Schemas (2020-12) describe both inputs:
-`https://tidigar.com/schema/share-link-v1.json` the payload and
-`https://tidigar.com/schema/plan-v1.json` the plan. Rules across records,
+`https://tidigar.com/agents/schema/share-link-v1.json` the payload and
+`https://tidigar.com/agents/schema/plan-v1.json` the plan. Rules across records,
 such as dependency dates and the fragment length, are checked by the encoder
 and by Tidigar when a link opens, not by the schemas.
 
 Instructions for AI agents, with this encoder and a worked example, are at
-`https://tidigar.com/llms.txt`.
+`https://tidigar.com/agents/llms.txt`.
 
 Saved views may include `timelineShowWeeks` and `timelineShowQuarters`,
 boolean values defaulting to `true`. A `false` value excludes that level from

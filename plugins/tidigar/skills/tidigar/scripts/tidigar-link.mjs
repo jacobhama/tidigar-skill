@@ -1,5 +1,5 @@
 /* Tidigar share links for AI agents and scripts, version 1.
-   https://tidigar.com/llms.txt explains how to use this module.
+   https://tidigar.com/agents/llms.txt explains how to use this module.
 
    Run it with Node.js 20 or later, Deno or Bun:
 
@@ -2021,7 +2021,7 @@ const scope = { crypto: globalThis.crypto };
    positions. `toPayload` turns a plan into a share-link payload and fills in
    what is not semantic: the year, option colors and a timeline that fits the
    plan. `fromPayload` reads a payload back into a plan an agent can edit.
-   The schema at tidigar.com/schema/plan-v1.json describes the same format. */
+   The schema at tidigar.com/agents/schema/plan-v1.json describes the same format. */
 (function installTidigarPlan(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module && module.exports) module.exports = api;
@@ -2030,7 +2030,7 @@ const scope = { crypto: globalThis.crypto };
   'use strict';
 
   const DAY = 86400000;
-  const SCHEMA = 'https://tidigar.com/schema/plan-v1.json';
+  const SCHEMA = 'https://tidigar.com/agents/schema/plan-v1.json';
   const COLORS = ['4f7cff', '16a34a', 'f59e0b', '8a52c1', '0891b2', 'dc5f5f', '64748b', 'db2777'];
   const PERIOD_COLOR = '9aa7b5';
   const VIEW_TYPES = ['timeline', 'grid', 'list', 'flow'];
@@ -2609,7 +2609,7 @@ async function main(args) {
     return;
   }
   if (!input)
-    throw new Error('Give a plan file, or - for standard input. See tidigar.com/llms.txt.');
+    throw new Error('Give a plan file, or - for standard input. See tidigar.com/agents/llms.txt.');
   let text = '';
   if (input === '-') for await (const chunk of process.stdin) text += chunk;
   else text = await readFile(input, 'utf8');

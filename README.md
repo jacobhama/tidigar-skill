@@ -28,7 +28,7 @@ Then install Tidigar from the plugin list.
 ChatGPT and Claude apps: upload
 [tidigar-skill.zip](https://tidigar.com/agents/tidigar-skill.zip) as a skill.
 
-Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
+Agents without skills read [tidigar.com/agents/llms.txt](https://tidigar.com/agents/llms.txt).
 
 ## Contents
 

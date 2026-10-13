@@ -1,6 +1,6 @@
 # Tidigar examples for AI agents
 
-Each example shows a user's request, the plan an agent writes for it, what `node tidigar-link.mjs plan.json` prints and the answer. The instructions are in [llms.txt](https://tidigar.com/llms.txt).
+Each example shows a user's request, the plan an agent writes for it, what `node tidigar-link.mjs plan.json` prints and the answer. The instructions are in [llms.txt](https://tidigar.com/agents/llms.txt).
 
 ## Replace a heat pump
 
@@ -16,7 +16,7 @@ The agent assumes durations a typical installation takes, names the dimensions T
 
 ```json
 {
-  "$schema": "https://tidigar.com/schema/plan-v1.json",
+  "$schema": "https://tidigar.com/agents/schema/plan-v1.json",
   "version": 1,
   "name": "Replace the heat pump",
   "description": "From survey to a warm house before winter.",

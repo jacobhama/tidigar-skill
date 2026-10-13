@@ -30,7 +30,7 @@ If you cannot run either builder, explain that limitation and give the plan as a
 
 - Use only the plan fields described below. Owners, status and categories are dimensions, set through `values`.
 - Only a builder writes the link, its `s=1.…` text, the compact payload, day offsets and option numbers.
-- Read the [share link specification](https://tidigar.com/docs/share-links.md) only when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, deliver the supported part and explain what you left out.
+- Read the [share link specification](https://tidigar.com/agents/docs/share-links.md) only when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, deliver the supported part and explain what you left out.
 
 ## The model
 
@@ -123,21 +123,21 @@ Always give the clickable link. Where you can render HTML, you may also show the
 ## More, when you need it
 
 - [Examples](https://tidigar.com/agents/examples.md): a full request, plan, output and answer, and a change to a link.
-- [llms-full.txt](https://tidigar.com/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
+- [llms-full.txt](https://tidigar.com/agents/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
 
 ## Reference
 
 You do not need any of these to make or change a link: the module and the Python builder already follow every rule.
 
-- [Share link specification](https://tidigar.com/docs/share-links.md): every field and limit of the payload. Read it in full before you write a payload yourself or need what a plan cannot express, such as saved views or filters.
-- [Plan schema](https://tidigar.com/schema/plan-v1.json) and [payload schema](https://tidigar.com/schema/share-link-v1.json): JSON Schema 2020-12, for validation in your own code.
+- [Share link specification](https://tidigar.com/agents/docs/share-links.md): every field and limit of the payload. Read it in full before you write a payload yourself or need what a plan cannot express, such as saved views or filters.
+- [Plan schema](https://tidigar.com/agents/schema/plan-v1.json) and [payload schema](https://tidigar.com/agents/schema/share-link-v1.json): JSON Schema 2020-12, for validation in your own code.
 - [Example roadmaps](https://tidigar.com/examples/): ready-made plans to start from.
 
 Other formats, only when the user asks for them and never to make a link:
 
-- [Roadmaps in Markdown](https://tidigar.com/docs/markdown.md): a roadmap as text, for a repository or a document.
-- [Embed stories](https://tidigar.com/docs/stories.md): timed changes with captions on an embedded roadmap, for animated demos.
-- [Roadmap file format](https://tidigar.com/docs/file-format.md): the full model with IDs, for Tidigar's JSON and `.tidigar` files.
+- [Roadmaps in Markdown](https://tidigar.com/agents/docs/markdown.md): a roadmap as text, for a repository or a document.
+- [Embed stories](https://tidigar.com/agents/docs/stories.md): timed changes with captions on an embedded roadmap, for animated demos.
+- [Roadmap file format](https://tidigar.com/agents/docs/file-format.md): the full model with IDs, for Tidigar's JSON and `.tidigar` files.
 
 ## The Python builder
 
@@ -150,7 +150,7 @@ python3 tidigar_link.py plan.json
 In a notebook, run the code once, then build from the plan as a Python dict: `payload = to_payload(plan)`, `print(link(payload))` and `print(summary(payload))`. `read(url)` returns a link's plan.
 
 ```python
-"""Tidigar share links from plans, version 1: https://tidigar.com/llms.txt
+"""Tidigar share links from plans, version 1: https://tidigar.com/agents/llms.txt
 python3 tidigar_link.py plan.json      build a link; - reads standard input
 python3 tidigar_link.py --read LINK    print a link's roadmap as a plan"""
 import base64, datetime, json, re, sys, zlib

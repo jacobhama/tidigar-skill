@@ -1,4 +1,4 @@
-"""Tidigar share links from plans, version 1: https://tidigar.com/llms.txt
+"""Tidigar share links from plans, version 1: https://tidigar.com/agents/llms.txt
 python3 tidigar_link.py plan.json      build a link; - reads standard input
 python3 tidigar_link.py --read LINK    print a link's roadmap as a plan"""
 import base64, datetime, json, re, sys, zlib
