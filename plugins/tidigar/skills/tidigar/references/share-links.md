@@ -291,7 +291,7 @@ such as dependency dates and the fragment length, are checked by the encoder
 and by Tidigar when a link opens, not by the schemas.
 
 Instructions for AI agents, with this encoder and a worked example, are at
-`https://tidigar.com/agents/llms.txt`.
+`https://tidigar.com/llms.txt`.
 
 Saved views may include `timelineShowWeeks` and `timelineShowQuarters`,
 boolean values defaulting to `true`. A `false` value excludes that level from

@@ -123,7 +123,7 @@ Always give the clickable link. Where you can render HTML, you may also show the
 ## More, when you need it
 
 - [Examples](https://tidigar.com/agents/examples.md): a full request, plan, output and answer, and a change to a link.
-- [llms-full.txt](https://tidigar.com/agents/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
+- [llms-full.txt](https://tidigar.com/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
 
 ## Reference
 
@@ -150,7 +150,7 @@ python3 tidigar_link.py plan.json
 In a notebook, run the code once, then build from the plan as a Python dict: `payload = to_payload(plan)`, `print(link(payload))` and `print(summary(payload))`. `read(url)` returns a link's plan.
 
 ```python
-"""Tidigar share links from plans, version 1: https://tidigar.com/agents/llms.txt
+"""Tidigar share links from plans, version 1: https://tidigar.com/llms.txt
 python3 tidigar_link.py plan.json      build a link; - reads standard input
 python3 tidigar_link.py --read LINK    print a link's roadmap as a plan"""
 import base64, datetime, json, re, sys, zlib

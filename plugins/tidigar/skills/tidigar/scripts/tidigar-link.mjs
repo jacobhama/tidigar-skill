@@ -1,5 +1,5 @@
 /* Tidigar share links for AI agents and scripts, version 1.
-   https://tidigar.com/agents/llms.txt explains how to use this module.
+   https://tidigar.com/llms.txt explains how to use this module.
 
    Run it with Node.js 20 or later, Deno or Bun:
 
@@ -2609,7 +2609,7 @@ async function main(args) {
     return;
   }
   if (!input)
-    throw new Error('Give a plan file, or - for standard input. See tidigar.com/agents/llms.txt.');
+    throw new Error('Give a plan file, or - for standard input. See tidigar.com/llms.txt.');
   let text = '';
   if (input === '-') for await (const chunk of process.stdin) text += chunk;
   else text = await readFile(input, 'utf8');
