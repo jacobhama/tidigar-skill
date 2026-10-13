@@ -7,7 +7,7 @@ description: Make Tidigar roadmaps, Gantt charts and project timelines as share 
 
 > Tidigar is a local-first roadmap and Gantt chart editor. An AI agent can turn a list of activities into a Tidigar share link: one clickable URL that carries the whole roadmap in its fragment and opens it as an editable timeline in the user's own Tidigar. No account, API key, backend or upload is involved, and nothing about the roadmap is stored on a server.
 
-This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `examples.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
+This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `example_sharelink.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
 
 Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. Creating a link needs code execution, because the roadmap is compressed into the link.
 
@@ -122,7 +122,7 @@ Always give the clickable link. Where you can render HTML, you may also show the
 
 ## More, when you need it
 
-- [Examples](https://tidigar.com/agents/examples.md): a full request, plan, output and answer, and a change to a link.
+- [Examples](https://tidigar.com/agents/example_sharelink.md): a full request, plan, output and answer, and a change to a link.
 - [llms-full.txt](https://tidigar.com/llms-full.txt): this file, the examples and the share link specification in one file. Read it instead of this file, not as well: it starts with this file word for word.
 
 ## Reference
