@@ -52,8 +52,12 @@ cannot read gets a new version number, and version 1 stays readable.
 
 A decoder MUST reject another version, a longer fragment, characters outside
 `A–Z a–z 0–9 - _`, data that does not inflate, more than **262,144** inflated
-bytes, invalid JSON or a payload that does not describe a valid roadmap. It
-MUST NOT open a partial roadmap.
+bytes or invalid JSON. A decoder MAY repair dependency date conflicts by
+moving activities and dependent milestones later, preserving activity duration,
+all records and all dependencies. Valid partial overlaps MUST remain unchanged.
+The complete repaired roadmap MUST pass validation before opening; other
+validation failures MUST be rejected. A decoder MUST NOT open a partial roadmap.
+Tidigar reports the number of activities and milestones whose dates it adjusted.
 
 ## Payload
 
@@ -274,7 +278,8 @@ async function shareFragment(payload) {
 ```
 
 Before sharing, check the dates and dependencies against the rules above: a
-link whose roadmap is invalid does not open.
+link with dependency date conflicts may open with adjusted dates. Other
+validation failures prevent opening. Encoders still require a valid roadmap.
 
 ## Reference encoder
 

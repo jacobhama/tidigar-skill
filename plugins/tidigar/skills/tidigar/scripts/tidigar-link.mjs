@@ -1449,7 +1449,8 @@ const scope = { crypto: globalThis.crypto };
     }).pipeThrough(stream);
   }
 
-  function createFactory({ model }) {
+  // Opening surfaces may supply a dates-only repair; encoders stay strict.
+  function createFactory({ model, repairDates = null }) {
     /* Pack a normalized project into plain JSON values without IDs. */
     function pack(projectInput, initialView) {
       const project = model.normalizeProject(projectInput);
@@ -1779,7 +1780,17 @@ const scope = { crypto: globalThis.crypto };
           );
         }),
       };
-      const project = inPositions(raw, () => model.normalizeProject(raw));
+      let repairs = [];
+      const project = inPositions(raw, () => {
+        try {
+          return model.normalizeProject(raw);
+        } catch (error) {
+          if (!repairDates) throw error;
+          const repaired = repairDates(raw);
+          repairs = repaired.repairs;
+          return repaired.project;
+        }
+      });
       let view = null;
       if (payload.o !== undefined) {
         const [normalized] = inPositions(
@@ -1791,7 +1802,7 @@ const scope = { crypto: globalThis.crypto };
           Object.entries(normalized).filter(([key]) => !OMITTED_VIEW_FIELDS.has(key)),
         );
       }
-      return { project, view };
+      return { project, view, ...(repairs.length ? { repairs } : {}) };
     }
 
     /**
@@ -1910,7 +1921,9 @@ const scope = { crypto: globalThis.crypto };
      * validated project under new IDs and the normalized initial view, or
      * `null`; `options.like` keeps that project's IDs (see `unpack`). Error
      * codes: `not-share-link`, `unsupported-version`, `too-large`, `corrupt`,
-     * `invalid`.
+     * `invalid`. A configured `repairDates` callback may correct dependency
+     * dates; a repaired result also includes `{ collection, id, fields }[]`
+     * in `repairs`. Strict validation is always tried first.
      */
     async function decode(fragment, options) {
       const text = typeof fragment === 'string' ? fragment.replace(/^#/, '') : '';
