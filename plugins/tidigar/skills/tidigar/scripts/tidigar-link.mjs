@@ -643,7 +643,7 @@ const scope = { crypto: globalThis.crypto };
     const year = Number.isInteger(context.year) ? context.year : new Date().getFullYear();
     const defaultStart = `${year}-01-01`;
     const defaultEnd = `${year}-12-31`;
-    const columnKeys = new Set(['title', 'start', 'end', ...dimensions]);
+    const columnKeys = new Set(['title', 'duration', 'start', 'end', ...dimensions]);
     return views.map((view, index) => {
       const path = `sharedViews[${index}]`;
       const source = requireRecord(view, path);
@@ -1851,7 +1851,9 @@ const scope = { crypto: globalThis.crypto };
           for (const key of COLUMN_FIELDS)
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
-                (column) => ['title', 'start', 'end'].includes(column) || dimensionIds.has(column),
+                (column) =>
+                  ['title', 'duration', 'start', 'end'].includes(column) ||
+                  dimensionIds.has(column),
               );
           if (record.filters)
             record.filters = Object.fromEntries(
@@ -2059,7 +2061,16 @@ const scope = { crypto: globalThis.crypto };
       'periods',
       'view',
     ],
-    activity: ['title', 'start', 'end', 'description', 'progress', 'values', 'dependsOn'],
+    activity: [
+      'title',
+      'start',
+      'end',
+      'description',
+      'progress',
+      'values',
+      'dependsOn',
+      'startAfter',
+    ],
     milestone: ['title', 'date', 'dependsOn', 'fixed'],
     period: ['title', 'start', 'end', 'color', 'vacation'],
     option: ['name', 'color'],
@@ -2225,6 +2236,17 @@ const scope = { crypto: globalThis.crypto };
           values[dimensions.indexOf(dimension)] = position + 1;
         }
       }
+      const dependsOn = dependencies(activity.dependsOn, `${path}.dependsOn`, true);
+      const startAfter = list(activity.startAfter, `${path}.startAfter`).slice();
+      if (startAfter.length > dependsOn.length)
+        fail(`${path}.startAfter`, 'must not have more entries than dependsOn');
+      startAfter.forEach((share, position) => {
+        if (![0, 25, 50, 75, 100].includes(share))
+          fail(`${path}.startAfter[${position}]`, 'must be one of 0, 25, 50, 75, or 100');
+        if (share !== 100 && dependsOn[position] >= activities.length)
+          fail(`${path}.startAfter[${position}]`, 'a fixed milestone requires 100');
+      });
+      while (startAfter.at(-1) === 100) startAfter.pop();
       return {
         title: text(activity.title, `${path}.title`, ''),
         start,
@@ -2232,7 +2254,8 @@ const scope = { crypto: globalThis.crypto };
         description: text(activity.description, `${path}.description`, ''),
         progress: activity.progress ?? 0,
         values: Array.from(values, (value) => value ?? 0),
-        dependsOn: dependencies(activity.dependsOn, `${path}.dependsOn`, true),
+        dependsOn,
+        startAfter,
       };
     });
     const milestones = list(plan.milestones, 'milestones').map((milestone, index) => {
@@ -2306,8 +2329,9 @@ const scope = { crypto: globalThis.crypto };
             item.progress,
             values,
             item.dependsOn,
+            item.startAfter,
           ],
-          [null, null, null, '', 0, [], []],
+          [null, null, null, '', 0, [], [], []],
         );
       });
     if (milestones.length)
@@ -2402,6 +2426,7 @@ const scope = { crypto: globalThis.crypto };
           progress = 0,
           values = [],
           dependsOn = [],
+          startAfter = [],
         ]) => {
           const activity = { title, start: day(start), end: day(start + length) };
           if (description) activity.description = description;
@@ -2417,6 +2442,7 @@ const scope = { crypto: globalThis.crypto };
               ]),
             );
           if (dependsOn.length) activity.dependsOn = dependsOn.map(reference);
+          if (startAfter.length) activity.startAfter = startAfter.slice();
           return activity;
         },
       );
@@ -2494,7 +2520,7 @@ function describe(project, labels = PAYLOAD_LABELS) {
   project.milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
   const after = (record) =>
     record.dependsOn.length
-      ? ` · after ${record.dependsOn.map((id) => position.get(id)).join(', ')}`
+      ? ` · after ${record.dependsOn.map((id) => position.get(id) + (record.startAfter?.[id] === undefined ? '' : ` (${record.startAfter[id]}%)`)).join(', ')}`
       : '';
   const values = (item) =>
     project.manifest.dimensions

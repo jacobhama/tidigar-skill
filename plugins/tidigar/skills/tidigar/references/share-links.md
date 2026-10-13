@@ -116,14 +116,23 @@ Trailing default positions MAY be left out, and trailing `0` entries in
 A predecessor index below the number of activities refers to an activity,
 which MUST end before this activity starts, unless `startAfter` lets it start
 earlier. `startAfter` holds, in the order of `dependsOn`, how much of each
-predecessor has passed when this activity may start: `0`, `25`, `50`, `75` or
+predecessor’s planned duration has passed when this activity may start,
+independently of its reported progress: `0`, `25`, `50`, `75` or
 `100`. A missing entry and `100` mean the same: after the predecessor's end;
 trailing `100` entries MAY be left out. With a share below `100` the activity
 MUST NOT start before that predecessor starts, and a fixed milestone always
 has `100`. An index from the number of
 activities upward refers to the milestone at that index minus the number of
 activities; it MUST be a fixed milestone, and this activity MUST NOT start
-before its date.
+before its date. The array MUST NOT have more entries than `dependsOn`.
+
+Scheduling counts the predecessor’s inclusive days, or work days when `w`
+is `1`, and rounds the chosen share up. For example, a 19-day activity
+starting March 16 reaches 50% after 10 days, allowing a March 26 start.
+At 0% the activities may start together; at 100% the successor waits until
+the day after the predecessor ends. With several dependencies, the latest
+threshold applies. Reading a link preserves dates and checks the stored
+rules above; it does not reschedule activities against the work calendar.
 
 ### Milestone and period tuples
 
@@ -150,7 +159,7 @@ except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 | `row`, `col`, `color`, `group`, `flowGroup` | dimension index, or `""` for none                    |
 | `filters`                                   | object: dimension index as key → option number       |
 | `colorOverrides`                            | object: `"<dimension index>.<option index>"` → color |
-| `listColumns`, `listColumnOrder`            | `"title"`, `"start"`, `"end"` or a dimension index   |
+| `listColumns`, `listColumnOrder`            | `"title"`, `"duration"`, `"start"`, `"end"` or a dimension index |
 
 Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out

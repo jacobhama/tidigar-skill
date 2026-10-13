@@ -38,7 +38,7 @@ A roadmap is a handful of records. Everything Tidigar shows is a view of them.
 
 - **Activity**: a bar on the timeline. A title, a start date and an inclusive end date, with an optional description, progress (`0`, `25`, `50`, `75` or `100`) and one option per dimension.
 - **Dimension**: a way to sort activities, such as Team, Phase or Status, with options in order, each with a color. Owners, status and categories are all dimensions; there are no other fields for them. Dimensions decide grouping, board rows and columns, colors and filters.
-- **Dependency**: an activity or a milestone waits for activities. It starts at least one day after each of them ends, and there are no cycles. An activity can also wait for a fixed milestone and start on its date. When an activity or a fixed milestone moves in Tidigar, what waits for it follows.
+- **Dependency**: an activity normally starts at least one day after each activity it waits for ends (100%). Its optional `startAfter` chooses a threshold per dependency: `0`, `25`, `50`, `75` or `100` percent of the predecessor’s planned duration. At 0% they may start together; at 50% the successor may start after half the predecessor’s days have passed, rounded up. This is planned time, not the predecessor’s reported `progress`. Count work days when `workDays` is true, otherwise calendar days. With several dependencies, all thresholds must be met. Dependencies cannot form cycles. Milestones that wait for activities always wait for their end. An activity can also wait for a fixed milestone and start on its date; that dependency has no partial threshold. When an activity or a fixed milestone moves in Tidigar, what waits for it follows.
 - **Milestone**: a titled single date, which can wait for activities. A fixed milestone (`"fixed": true`) is instead an event on a set date, such as a decision or a delivery: it waits for nothing, and activities name it by title in their `dependsOn`.
 - **Period**: a titled band across the timeline, such as a holiday or a sprint. It is a vacation unless it says otherwise.
 - **Work days**: a roadmap is planned in calendar days or in work days: Monday to Friday, without vacation periods. Dates are calendar dates either way.
@@ -63,26 +63,28 @@ The output of the serializer is authoritative, and the whole roadmap lives in th
   "activities": [
     { "title": "Requirements", "start": "2026-03-02", "end": "2026-03-13", "progress": 100, "values": { "Team": "Design", "Phase": "Plan" } },
     { "title": "Design", "start": "2026-03-16", "end": "2026-04-03", "progress": 50, "values": { "Team": "Design", "Phase": "Plan" }, "dependsOn": ["Requirements"] },
-    { "title": "Build", "start": "2026-04-06", "end": "2026-05-15", "values": { "Team": "Development", "Phase": "Build" }, "dependsOn": ["Design"] },
+    { "title": "Build", "start": "2026-03-26", "end": "2026-05-15", "values": { "Team": "Development", "Phase": "Build" }, "dependsOn": ["Design"], "startAfter": [50] },
     { "title": "Test", "start": "2026-05-18", "end": "2026-05-29", "values": { "Team": "Development", "Phase": "Build" }, "dependsOn": ["Build"] }
   ],
   "milestones": [{ "title": "Launch", "date": "2026-06-01", "dependsOn": ["Test"] }]
 }
 ```
 
-- These are all the fields. Any other field is an error; owners, status and categories are dimensions, set through `values`.
+- Unknown fields are errors; owners, status and categories belong in `values`.
 - `name` is required, 1–100 characters. Everything else is optional: `description`, `workDays` (`true` plans in work days), `dimensions`, `activities`, `milestones`, `periods` and `view`.
 - Dates are `YYYY-MM-DD`. `end` is inclusive; left out, the activity lasts one day.
 - `dimensions` maps a name to its options in order. An option is a name, or `{ "name": "Design", "color": "#4f7cff" }`. An activity's `values` names one option per dimension; an option no dimension lists is added.
-- `dependsOn` names activities by title, or by 0-based index where titles repeat.
+- `dependsOn` names activities by title, or by 0-based index where titles repeat. Activities may also name fixed milestones by title.
+- An activity’s `startAfter` is an array in the same order as `dependsOn`, for example `"dependsOn": ["Design", "Approval"], "startAfter": [50, 100]`. Values are `0`, `25`, `50`, `75` or `100`; missing entries mean `100`, and trailing `100` entries may be omitted. It cannot have more entries than `dependsOn`; fixed milestones require `100`. In the example, Design lasts 19 calendar days, so Build starts on March 26, after `ceil(19 × 50 / 100) = 10` days.
+- Builders preserve supplied dates. For a partial threshold, validation requires only that the successor does not start before the predecessor; it does not recalculate the work calendar. Choose dates that meet the intended threshold. Tidigar’s editor uses the exact threshold when scheduling.
 - Titles are at most 180 characters; milestones and periods need one.
 - `periods`: `{ "title", "start", "end", "color", "vacation" }`.
 - `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and `columns` take a dimension's name; `start` and `end` set the timeline's range. Left out, the link opens a timeline over the plan's dates, grouped and colored by the first dimension, and its board has the first dimension as rows and the second as columns.
-- A link holds roughly 20 to 30 activities. When a plan is too large, shorten descriptions and merge small activities, and tell the user what you left out. Never cut a link short.
+- A link holds roughly 20–30 activities. If too large, shorten descriptions or merge small activities and explain omissions. Never truncate a link.
 
 The example opens as a timeline grouped and colored by team, and its board has a column per phase:
 
-https://open.tidigar.com/s#s=1.XZDLasMwEEV_pcx6ApL8arwM7a6L0Aa6MFqozjgRyHJqySkl5N8ryW76AC0Gnbl37swFLNTwSm9Oe7ozarLtERA-oRZMlAg91E0DO1I9YCgeyOmDDQ15V7VdBxLj35nMcOrJ-gB4qbJcgZQRbY_KURJujfon20za7P8IJIJO457pfdIjRUcHWDLkHAGQM4YNRy7nqXOSKkd-H2mxQGyY_OW_LjBbRx6wQBHIrN-RC3F5Vi3mNyxSEJeCPC334AXHJktggPoCZ00f4Wxe92S0DRtCO5hhhJohHMZhOqXqG794NfrQHi-6YtmKCfiBj3Z_Q-FxuF6_AA
+https://open.tidigar.com/s#s=1.XZBNa8MwDIb_ytBZBdv5KjmO7bZD2Qo7BB-8VG0NjtPFScco_e-Tnaz7AB-En1d6X-kCHmp4pbdgR7pzZvLtERA-oVZClQgd1E0DWzIdIBcPFOzBsyDfV-1-Dxrj35lcf-rIjwxkabLcgNYRbY4mUGrcOPOv7X6ybvenQSPYZPdM75MdKE4MgKVAKREApRDYSJR6dp2TVDnKdaTFArER-tf8dR4Jc8YKFZMoKWbNlgJnllm1ONw0KqUJKc3TchRZSGyyBHqoL3C29MG3G21HznpeE9re9QPUbHcY-umUqm_8MpphZHk860pkK6HgBz763Q3xk3C9fgE
 
 ## The reference module
 
@@ -162,7 +164,7 @@ VIEW = {"type": "view", "groupBy": "group", "colorBy": "color", "rows": "row",
         "columns": "col", "start": "timelineStart", "end": "timelineEnd"}
 KEYS = {"plan": ["$schema", "version", "name", "description", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
-        "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn"],
+        "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn", "startAfter"],
         "milestone": ["title", "date", "dependsOn", "fixed"],
         "period": ["title", "start", "end", "color", "vacation"],
         "option": ["name", "color"], "view": list(VIEW)}
@@ -330,10 +332,24 @@ def to_payload(plan):
             if option not in [known for known, _ in options]:
                 add(options, option, None, at)
             values[list(dims).index(key)] = [known for known, _ in options].index(option) + 1
+        dep = depends(a.get("dependsOn"), f"{path}.dependsOn", True)
+        shares = a.get("startAfter", [])
+        if not isinstance(shares, list):
+            fail(f"{path}.startAfter", "expected an array")
+        shares = shares[:]
+        if len(shares) > len(dep):
+            fail(f"{path}.startAfter", "must not have more entries than dependsOn")
+        for position, share in enumerate(shares):
+            if isinstance(share, bool) or share not in (0, 25, 50, 75, 100):
+                fail(f"{path}.startAfter[{position}]", "must be one of 0, 25, 50, 75, or 100")
+            if share != 100 and dep[position] >= len(acts):
+                fail(f"{path}.startAfter[{position}]", "a fixed milestone requires 100")
+        while shares and shares[-1] == 100:
+            shares.pop()
         dated += [start, end]
         rows.append([text(a.get("title", ""), f"{path}.title", 180), start, end - start,
                      text(a.get("description", ""), f"{path}.description", 10**6), progress,
-                     values, depends(a.get("dependsOn"), f"{path}.dependsOn", True), path])
+                     values, dep, path, shares])
     for i, m in enumerate(points):
         path = named(f"milestones[{i}]", m)
         date = day(m.get("date"), f"{path}.date")
@@ -356,13 +372,32 @@ def to_payload(plan):
                       0 if flag(p.get("vacation"), f"{path}.vacation") is False else 1])
     flag(plan.get("workDays"), "workDays")
 
-    # Dependencies: a day after each activity waited for, or on a fixed milestone's date.
+    # Partial dependencies permit overlap, so date ordering alone cannot rule out cycles.
+    visiting, visited = set(), set()
+    def visit(index):
+        if index in visiting:
+            fail(f"{rows[index][7]}.dependsOn", "dependency cycle")
+        if index in visited:
+            return
+        visiting.add(index)
+        for parent in rows[index][6]:
+            if parent < len(rows):
+                visit(parent)
+        visiting.remove(index)
+        visited.add(index)
+    for index in range(len(rows)):
+        visit(index)
+
+    # Stored dates are preserved; partial dependencies cannot precede the parent's start.
     for row in rows:
-        for index in row[6]:
+        for position, index in enumerate(row[6]):
             if index >= len(rows):
                 mark = marks[index - len(rows)]
                 if row[1] < mark[1]:
                     fail(f"{row[7]}.start", f"must not be before fixed milestone {mark[4]}")
+            elif position < len(row[8]) and row[8][position] < 100:
+                if row[1] < rows[index][1]:
+                    fail(f"{row[7]}.start", f"must not be before dependency {rows[index][7]} starts")
             elif row[1] <= rows[index][1] + rows[index][2]:
                 fail(f"{row[7]}.start", f"must be at least one day after dependency {rows[index][7]} ends")
     for mark in marks:
@@ -387,8 +422,8 @@ def to_payload(plan):
     if dims:
         payload["m"] = [[key, options] for key, options in dims.items()]
     if rows:
-        payload["i"] = [trim([t, s - base, n, d, pr, [v.get(k, 0) for k in range(max(v, default=-1) + 1)], dep],
-                             [None, None, None, "", 0, [], []]) for t, s, n, d, pr, v, dep, _ in rows]
+        payload["i"] = [trim([t, s - base, n, d, pr, [v.get(k, 0) for k in range(max(v, default=-1) + 1)], dep, shares],
+                             [None, None, None, "", 0, [], [], []]) for t, s, n, d, pr, v, dep, _, shares in rows]
     if marks:
         payload["s"] = [trim([t, d - base, dep, f], [None, None, [], 0]) for t, d, dep, f, _ in marks]
     if bands:
@@ -475,6 +510,8 @@ def read(url):
                 activity["values"] = chosen
             if after:
                 activity["dependsOn"] = [ref(index) for index in after]
+            if len(row) > 7 and row[7]:
+                activity["startAfter"] = row[7]
             plan["activities"].append(activity)
     if marks:
         plan["milestones"] = [dict({"title": m[0], "date": iso(base + m[1])},
@@ -500,14 +537,16 @@ def summary(payload):
     base = datetime.date(payload["y"], 1, 1).toordinal()
     rows, marks, dims = payload.get("i", []), payload.get("s", []), payload.get("m", [])
     place = lambda index: f"activities[{index}]" if index < len(rows) else f"milestones[{index - len(rows)}]"
-    after = lambda refs: " · after " + ", ".join(map(place, refs)) if refs else ""
+    def after(refs, shares=()):
+        return (" · after " + ", ".join(place(ref) + (f" ({shares[i]}%)" if i < len(shares) and shares[i] < 100 else "")
+                                       for i, ref in enumerate(refs))) if refs else ""
     lines = [f"{payload['n']} ({payload['y']}{', work days' if payload.get('w') else ''})"]
     for i, row in enumerate(rows):
         row = row + ["", 0, 0, "", 0, [], []][len(row):]
         lines.append(f"activities[{i}] {row[0] or '(untitled)'}: {iso(base + row[1])} – {iso(base + row[1] + row[2])}"
                      + (f" · {row[4]}% done" if row[4] else "")
                      + "".join(f" · {dims[k][0]}: {dims[k][1][v - 1][0]}" for k, v in enumerate(row[5]) if v)
-                     + after(row[6]))
+                     + after(row[6], row[7] if len(row) > 7 else []))
     for i, m in enumerate(marks):
         lines.append(f"milestones[{i}] {m[0]}: {iso(base + m[1])}" + (" · fixed" if m[3:] == [1] else "")
                      + after(m[2] if len(m) > 2 else []))

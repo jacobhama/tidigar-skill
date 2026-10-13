@@ -10,7 +10,7 @@ VIEW = {"type": "view", "groupBy": "group", "colorBy": "color", "rows": "row",
         "columns": "col", "start": "timelineStart", "end": "timelineEnd"}
 KEYS = {"plan": ["$schema", "version", "name", "description", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
-        "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn"],
+        "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn", "startAfter"],
         "milestone": ["title", "date", "dependsOn", "fixed"],
         "period": ["title", "start", "end", "color", "vacation"],
         "option": ["name", "color"], "view": list(VIEW)}
@@ -178,10 +178,24 @@ def to_payload(plan):
             if option not in [known for known, _ in options]:
                 add(options, option, None, at)
             values[list(dims).index(key)] = [known for known, _ in options].index(option) + 1
+        dep = depends(a.get("dependsOn"), f"{path}.dependsOn", True)
+        shares = a.get("startAfter", [])
+        if not isinstance(shares, list):
+            fail(f"{path}.startAfter", "expected an array")
+        shares = shares[:]
+        if len(shares) > len(dep):
+            fail(f"{path}.startAfter", "must not have more entries than dependsOn")
+        for position, share in enumerate(shares):
+            if isinstance(share, bool) or share not in (0, 25, 50, 75, 100):
+                fail(f"{path}.startAfter[{position}]", "must be one of 0, 25, 50, 75, or 100")
+            if share != 100 and dep[position] >= len(acts):
+                fail(f"{path}.startAfter[{position}]", "a fixed milestone requires 100")
+        while shares and shares[-1] == 100:
+            shares.pop()
         dated += [start, end]
         rows.append([text(a.get("title", ""), f"{path}.title", 180), start, end - start,
                      text(a.get("description", ""), f"{path}.description", 10**6), progress,
-                     values, depends(a.get("dependsOn"), f"{path}.dependsOn", True), path])
+                     values, dep, path, shares])
     for i, m in enumerate(points):
         path = named(f"milestones[{i}]", m)
         date = day(m.get("date"), f"{path}.date")
@@ -204,13 +218,32 @@ def to_payload(plan):
                       0 if flag(p.get("vacation"), f"{path}.vacation") is False else 1])
     flag(plan.get("workDays"), "workDays")
 
-    # Dependencies: a day after each activity waited for, or on a fixed milestone's date.
+    # Partial dependencies permit overlap, so date ordering alone cannot rule out cycles.
+    visiting, visited = set(), set()
+    def visit(index):
+        if index in visiting:
+            fail(f"{rows[index][7]}.dependsOn", "dependency cycle")
+        if index in visited:
+            return
+        visiting.add(index)
+        for parent in rows[index][6]:
+            if parent < len(rows):
+                visit(parent)
+        visiting.remove(index)
+        visited.add(index)
+    for index in range(len(rows)):
+        visit(index)
+
+    # Stored dates are preserved; partial dependencies cannot precede the parent's start.
     for row in rows:
-        for index in row[6]:
+        for position, index in enumerate(row[6]):
             if index >= len(rows):
                 mark = marks[index - len(rows)]
                 if row[1] < mark[1]:
                     fail(f"{row[7]}.start", f"must not be before fixed milestone {mark[4]}")
+            elif position < len(row[8]) and row[8][position] < 100:
+                if row[1] < rows[index][1]:
+                    fail(f"{row[7]}.start", f"must not be before dependency {rows[index][7]} starts")
             elif row[1] <= rows[index][1] + rows[index][2]:
                 fail(f"{row[7]}.start", f"must be at least one day after dependency {rows[index][7]} ends")
     for mark in marks:
@@ -235,8 +268,8 @@ def to_payload(plan):
     if dims:
         payload["m"] = [[key, options] for key, options in dims.items()]
     if rows:
-        payload["i"] = [trim([t, s - base, n, d, pr, [v.get(k, 0) for k in range(max(v, default=-1) + 1)], dep],
-                             [None, None, None, "", 0, [], []]) for t, s, n, d, pr, v, dep, _ in rows]
+        payload["i"] = [trim([t, s - base, n, d, pr, [v.get(k, 0) for k in range(max(v, default=-1) + 1)], dep, shares],
+                             [None, None, None, "", 0, [], [], []]) for t, s, n, d, pr, v, dep, _, shares in rows]
     if marks:
         payload["s"] = [trim([t, d - base, dep, f], [None, None, [], 0]) for t, d, dep, f, _ in marks]
     if bands:
@@ -323,6 +356,8 @@ def read(url):
                 activity["values"] = chosen
             if after:
                 activity["dependsOn"] = [ref(index) for index in after]
+            if len(row) > 7 and row[7]:
+                activity["startAfter"] = row[7]
             plan["activities"].append(activity)
     if marks:
         plan["milestones"] = [dict({"title": m[0], "date": iso(base + m[1])},
@@ -348,14 +383,16 @@ def summary(payload):
     base = datetime.date(payload["y"], 1, 1).toordinal()
     rows, marks, dims = payload.get("i", []), payload.get("s", []), payload.get("m", [])
     place = lambda index: f"activities[{index}]" if index < len(rows) else f"milestones[{index - len(rows)}]"
-    after = lambda refs: " · after " + ", ".join(map(place, refs)) if refs else ""
+    def after(refs, shares=()):
+        return (" · after " + ", ".join(place(ref) + (f" ({shares[i]}%)" if i < len(shares) and shares[i] < 100 else "")
+                                       for i, ref in enumerate(refs))) if refs else ""
     lines = [f"{payload['n']} ({payload['y']}{', work days' if payload.get('w') else ''})"]
     for i, row in enumerate(rows):
         row = row + ["", 0, 0, "", 0, [], []][len(row):]
         lines.append(f"activities[{i}] {row[0] or '(untitled)'}: {iso(base + row[1])} – {iso(base + row[1] + row[2])}"
                      + (f" · {row[4]}% done" if row[4] else "")
                      + "".join(f" · {dims[k][0]}: {dims[k][1][v - 1][0]}" for k, v in enumerate(row[5]) if v)
-                     + after(row[6]))
+                     + after(row[6], row[7] if len(row) > 7 else []))
     for i, m in enumerate(marks):
         lines.append(f"milestones[{i}] {m[0]}: {iso(base + m[1])}" + (" · fixed" if m[3:] == [1] else "")
                      + after(m[2] if len(m) > 2 else []))
