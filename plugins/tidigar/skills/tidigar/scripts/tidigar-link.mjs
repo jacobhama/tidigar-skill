@@ -643,7 +643,7 @@ const scope = { crypto: globalThis.crypto };
     const year = Number.isInteger(context.year) ? context.year : new Date().getFullYear();
     const defaultStart = `${year}-01-01`;
     const defaultEnd = `${year}-12-31`;
-    const columnKeys = new Set(['title', 'duration', 'start', 'end', ...dimensions]);
+    const columnKeys = new Set(['title', 'duration', 'start', 'end', 'dependsOn', ...dimensions]);
     return views.map((view, index) => {
       const path = `sharedViews[${index}]`;
       const source = requireRecord(view, path);
@@ -1863,7 +1863,7 @@ const scope = { crypto: globalThis.crypto };
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
                 (column) =>
-                  ['title', 'duration', 'start', 'end'].includes(column) ||
+                  ['title', 'duration', 'start', 'end', 'dependsOn'].includes(column) ||
                   dimensionIds.has(column),
               );
           if (record.filters)

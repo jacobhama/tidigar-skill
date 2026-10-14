@@ -166,7 +166,7 @@ except `id`, `projectId` and `hideTimelineLabels`, with these changes:
 | `row`, `col`, `color`, `group`, `flowGroup` | dimension index, or `""` for none                    |
 | `filters`                                   | object: dimension index as key → option number       |
 | `colorOverrides`                            | object: `"<dimension index>.<option index>"` → color |
-| `listColumns`, `listColumnOrder`            | `"title"`, `"duration"`, `"start"`, `"end"` or a dimension index |
+| `listColumns`, `listColumnOrder`            | `"title"`, `"duration"`, `"start"`, `"end"`, `"dependsOn"` or a dimension index |
 
 Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out
