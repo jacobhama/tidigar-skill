@@ -26,12 +26,13 @@ codex plugin marketplace add jacobhama/tidigar-skill
 Then install Tidigar from the plugin list.
 
 ChatGPT and Claude apps: upload
-[tidigar-skill.zip](https://tidigar.com/agents/tidigar-skill.zip) as a skill.
+[tidigar-skill.zip](https://github.com/jacobhama/tidigar-skill/raw/refs/heads/main/tidigar-skill.zip) as a skill.
 
 Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
 
 ## Contents
 
+- `tidigar-skill.zip`: the standalone skill for manual upload.
 - `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`:
   the Claude Code and Codex marketplaces, each listing the one plugin.
 - `plugins/tidigar/.claude-plugin/plugin.json` and `plugins/tidigar/plugin.json`:
