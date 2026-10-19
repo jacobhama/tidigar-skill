@@ -2497,7 +2497,68 @@ const scope = { crypto: globalThis.crypto };
     return isRecord(value) && !('n' in value) && ('name' in value || 'activities' in value);
   }
 
-  return Object.freeze({ SCHEMA, COLORS, PlanError, toPayload, fromPayload, isPlan });
+  function inPlanTerms(error) {
+    error.message = error.message
+      .replace(/\bactivity i\[/g, 'activities[')
+      .replace(/\bmilestone s\[/g, 'milestones[')
+      .replace(/\bperiod p\[/g, 'periods[')
+      .replace(/\binitial view o\b/g, 'view')
+      .replace(/\bmanifest\./g, '');
+    return error;
+  }
+
+  /* What a link holds, one record per line, with its place in the payload,
+     real dates and dependencies, for checking a plan against the request. */
+  function describe(
+    project,
+    labels = { i: 'activities', s: 'milestones', p: 'periods', v: 'views' },
+  ) {
+    const position = new Map();
+    project.items.forEach((item, index) => position.set(item.id, `${labels.i}[${index}]`));
+    project.milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
+    const after = (record) =>
+      record.dependsOn.length
+        ? ` · after ${record.dependsOn.map((id) => position.get(id) + (record.startAfter?.[id] === undefined ? '' : ` (${record.startAfter[id]}%)`)).join(', ')}`
+        : '';
+    const values = (item) =>
+      project.manifest.dimensions
+        .map((dimension) => {
+          const choice = dimension.options.find(
+            (option) => option.id === item.values[dimension.id],
+          );
+          return choice ? ` · ${dimension.name}: ${choice.name}` : '';
+        })
+        .join('');
+    const { manifest, items, milestones, periodIndicators, sharedViews } = project;
+    return [
+      `${manifest.name} (${manifest.year}${manifest.schedule === 'work-days' ? ', work days' : ''})`,
+      ...items.map(
+        (item, index) =>
+          `${labels.i}[${index}] ${item.title || '(untitled)'}: ${item.start} – ${item.end}` +
+          `${item.progress ? ` · ${item.progress}% done` : ''}${values(item)}${after(item)}`,
+      ),
+      ...milestones.map(
+        (milestone, index) =>
+          `${labels.s}[${index}] ${milestone.title}: ${milestone.date}` +
+          `${milestone.fixed ? ' · fixed' : ''}${after(milestone)}`,
+      ),
+      ...periodIndicators.map(
+        (period, index) => `${labels.p}[${index}] ${period.title}: ${period.start} – ${period.end}`,
+      ),
+      ...sharedViews.map((view, index) => `${labels.v}[${index}] view ${view.name}: ${view.view}`),
+    ].join('\n');
+  }
+
+  return Object.freeze({
+    SCHEMA,
+    COLORS,
+    PlanError,
+    toPayload,
+    fromPayload,
+    isPlan,
+    inPlanTerms,
+    describe,
+  });
 });
 })(scope);
 
@@ -2515,52 +2576,7 @@ export const PLAN_SCHEMA = planFormat.SCHEMA;
 const PAYLOAD_LABELS = { i: 'i', s: 's', p: 'p', v: 'v' };
 const PLAN_LABELS = { i: 'activities', s: 'milestones', p: 'periods', v: 'views' };
 
-function inPlanTerms(error) {
-  error.message = error.message
-    .replace(/\bactivity i\[/g, 'activities[')
-    .replace(/\bmilestone s\[/g, 'milestones[')
-    .replace(/\bperiod p\[/g, 'periods[')
-    .replace(/\binitial view o\b/g, 'view')
-    .replace(/\bmanifest\./g, '');
-  return error;
-}
-
-/* What a link holds, one record per line, with its place in the payload,
-   real dates and dependencies, for checking a plan against the request. */
-function describe(project, labels = PAYLOAD_LABELS) {
-  const position = new Map();
-  project.items.forEach((item, index) => position.set(item.id, `${labels.i}[${index}]`));
-  project.milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
-  const after = (record) =>
-    record.dependsOn.length
-      ? ` · after ${record.dependsOn.map((id) => position.get(id) + (record.startAfter?.[id] === undefined ? '' : ` (${record.startAfter[id]}%)`)).join(', ')}`
-      : '';
-  const values = (item) =>
-    project.manifest.dimensions
-      .map((dimension) => {
-        const choice = dimension.options.find((option) => option.id === item.values[dimension.id]);
-        return choice ? ` · ${dimension.name}: ${choice.name}` : '';
-      })
-      .join('');
-  const { manifest, items, milestones, periodIndicators, sharedViews } = project;
-  return [
-    `${manifest.name} (${manifest.year}${manifest.schedule === 'work-days' ? ', work days' : ''})`,
-    ...items.map(
-      (item, index) =>
-        `${labels.i}[${index}] ${item.title || '(untitled)'}: ${item.start} – ${item.end}` +
-        `${item.progress ? ` · ${item.progress}% done` : ''}${values(item)}${after(item)}`,
-    ),
-    ...milestones.map(
-      (milestone, index) =>
-        `${labels.s}[${index}] ${milestone.title}: ${milestone.date}` +
-        `${milestone.fixed ? ' · fixed' : ''}${after(milestone)}`,
-    ),
-    ...periodIndicators.map(
-      (period, index) => `${labels.p}[${index}] ${period.title}: ${period.start} – ${period.end}`,
-    ),
-    ...sharedViews.map((view, index) => `${labels.v}[${index}] view ${view.name}: ${view.view}`),
-  ].join('\n');
-}
+const { inPlanTerms, describe } = planFormat;
 
 function fragmentOf(link) {
   const text = String(link).trim();
