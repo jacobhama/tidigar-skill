@@ -167,12 +167,14 @@ curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @body.json "$API/organizati
 curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @body.json "$API/organizations/$ORG/plans"
 curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID"
 curl -sS -X PUT -H "$AUTH" -H "$JSON" -H "If-Match: \"$REVISION\"" --data-binary @body.json "$API/organizations/$ORG/plans/$PLAN_ID"
+curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @merge.json "$API/organizations/$ORG/plans/$PLAN_ID/merge"
 ```
 
 - `GET /token`: `organization.id` is `ORG`; `writable` says whether you may save. `GET /organizations/:org/plans` lists plans.
 - New plan: send `{ "plan": … }` to `POST /organizations/:org/plans/validate`, which answers `{ project, summary }`, then create with `{ "project": … }` to keep its ID.
 - Change: `GET /organizations/:org/plans/:id`, edit `project`, and send `{ "project": … }` to `PUT /organizations/:org/plans/:id` with the read `revision` as `REVISION`.
-- Errors are `{ "error": { "code", "message" } }`. `stale_revision` also carries the latest `plan`: redo your edit on it. After a lost answer, or `plan_exists` on a retried create, get the plan and compare before writing.
+- Someone saved first (`stale_revision`): send `{ "base": REVISION, "project": … }` to `POST /organizations/:org/plans/:id/merge`, which combines both changes and saves. `merge_conflicts` lists `conflicts` as for the CLI, each with its own `id`: ask the user about each, then send the same body with `"choices": { "<id>": "mine" | "latest" }` for every conflict so far, until it saves.
+- Errors are `{ "error": { "code", "message" } }`. `stale_revision` also carries the latest `plan`; if `merge` answers `no_such_revision`, redo your edit on it. After a lost answer, or `plan_exists` on a retried create, get the plan and compare before writing.
 
 ## More, when you need it
 
