@@ -1,8 +1,12 @@
 # Tidigar skill
 
-The Tidigar skill lets an AI agent make roadmaps, Gantt charts and project
-timelines as [Tidigar](https://tidigar.com) share links: one URL that opens
-the plan as an editable timeline. No account, API key or upload is involved.
+Plan with your AI assistant in [Tidigar](https://tidigar.com). Create a plan
+as a share link without a Tidigar account, or connect your assistant to read
+and update plans in Tidigar Cloud or Tidigar Server.
+
+A share link carries a separate copy of the plan. A Cloud plan is saved for
+your organisation, and changes appear for everyone who opens it. See
+[Connect your AI assistant](https://tidigar.com/agents/cloud) for setup.
 
 This repository is generated from Tidigar's sources and published as they
 change. Report problems to hello@tidigar.com rather than opening pull

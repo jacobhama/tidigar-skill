@@ -5,13 +5,19 @@ description: Make Tidigar roadmaps, Gantt charts and project timelines as share 
 
 # Tidigar
 
-> Tidigar is a local-first roadmap and Gantt chart editor. An AI agent can turn a list of activities into a Tidigar share link: one clickable URL that carries the whole roadmap in its fragment and opens it as an editable timeline in the user's own Tidigar. No account, API key, backend or upload is involved, and nothing about the roadmap is stored on a server.
+> Tidigar is a visual roadmap and Gantt chart editor. Help the user make a plan, share a copy, or work on a plan stored in Tidigar Cloud or Tidigar Server.
 
 This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `example_sharelink.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
 
-Use this when a user asks for a Gantt chart, timeline, project plan or roadmap made with Tidigar, or gives you a Tidigar link to change. Prefer the JavaScript or Python builder to create the compressed link. If you cannot download or execute either builder, you may generate the link yourself by following the published [share link specification](https://tidigar.com/agents/docs/share-links.md).
+Use this when a user asks for a roadmap, timeline, Gantt chart or project plan in Tidigar, or gives you a Tidigar link.
 
-If the user asks to save a plan in Tidigar, or to list, open or change a plan stored there, follow [Plans stored in Tidigar](#plans-stored-in-tidigar) instead. Stored plans work very differently from share links.
+## Choose the right action
+
+- **Make a new plan without saving it to Cloud:** create a share link with the quick start below. The whole plan travels in the link; no Tidigar account or plan upload is needed. Anyone with the link can read it. Later edits to the original do not update the copy.
+- **Save, find, open or change a stored plan:** follow [Plans stored in Tidigar](#plans-stored-in-tidigar). Use this path for a `/p/<organisation>/<plan-id>` link, and keep the existing plan's identity when updating it.
+- **Give the user a link to a stored plan:** return that plan's `url`. Create a separate share-link copy only when they ask for a copy. If their intent is unclear, ask whether they want the shared plan or a separate copy.
+
+For a share link, prefer the JavaScript or Python builder. If neither can run, follow the published [share link specification](https://tidigar.com/agents/docs/share-links.md).
 
 ## Quick start: create a plan and return its link
 
@@ -126,7 +132,7 @@ Always give the clickable link. Where you can render HTML, you may also show the
 
 ## Plans stored in Tidigar
 
-Tidigar Cloud, and a company's own Tidigar Server, store plans for an organisation. Save to Tidigar only when the user asks to save a plan there, to list, open or change a stored plan, or gives a `/p/<organisation>/<plan-id>` link. Otherwise, and whenever the user asks for a link, build a share link.
+Tidigar Cloud and Tidigar Server keep plans for an organisation. Use this section when the user asks to save, list, open or change a stored plan, or gives a `/p/<organisation>/<plan-id>` link. A link to that plan opens the shared plan; a share link opens a separate copy.
 
 **A stored plan is not a share link.** Of everything above, only writing `plan.json` for a new plan applies:
 
@@ -140,7 +146,7 @@ Use the first mode that works:
 1. **MCP:** your tools include `tidigar_get_plan`. The steps below map to the tools `tidigar_list_plans`, `tidigar_get_plan`, `tidigar_validate_plan`, `tidigar_create_plan` (`plan` or `project`, `newId`) `tidigar_update_plan` (`id`, `revision`, `project`, `merge`), `tidigar_resolve_merge` (`id`, `choices`), `tidigar_delete_plan` (`id`, `revision`), `tidigar_list_trash` and `tidigar_restore_plan` (`id`); errors carry the same codes.
 2. **CLI:** `tidigar status` exits 0. It keeps the token in the system's credential store.
 3. **HTTP:** `TIDIGAR_TOKEN` is set and you can make HTTPS requests; see [over HTTP](#stored-plans-over-http).
-4. **None:** build a share link. Tell the user to create a token in Tidigar under the account menu, **Agent access**, then run `tidigar login` themselves or set `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file.
+4. **None:** explain that you are not connected and have not read, saved or changed the stored plan. Point the user to [Connect your AI assistant](https://tidigar.com/agents/cloud). For CLI access, they create a token under **Account → Agent access** and run `tidigar login` themselves or set `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file. Offer a share-link copy as an alternative for a new plan, but do not substitute it for a requested save or update.
 
 With the CLI signed in, the user can add the MCP tools, for example `claude mcp add tidigar -- tidigar mcp` (`tidigar mcp --read-only` offers no writes).
 

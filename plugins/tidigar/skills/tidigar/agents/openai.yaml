@@ -1,10 +1,10 @@
 interface:
   display_name: "Tidigar"
-  short_description: "Make roadmaps and Gantt charts as Tidigar links"
+  short_description: "Create plans and work with your Tidigar Cloud plans"
   icon_small: "./assets/icon.svg"
   icon_large: "./assets/icon.png"
   brand_color: "#1068FC"
-  default_prompt: "Make a Tidigar Gantt chart of this project plan and give me the link."
+  default_prompt: "Help me plan this project in Tidigar."
 
 policy:
   allow_implicit_invocation: true

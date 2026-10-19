@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "tidigar",
   "version": "1.0.0",
-  "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar.",
+  "description": "Create Tidigar roadmaps and Gantt charts as share links, or read and update plans in Tidigar Cloud or Tidigar Server.",
   "author": {
     "name": "Hamacher Software AB",
     "email": "hello@tidigar.com",
@@ -22,8 +22,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Tidigar",
-        "shortDescription": "Make roadmaps and Gantt charts as Tidigar links",
-        "longDescription": "Turn a list of activities into a Tidigar share link: one URL that opens the roadmap as an editable timeline, board, table or dependency chart. The link carries the whole roadmap, so no account, API key or upload is involved, and nothing about the roadmap is stored on a server.",
+        "shortDescription": "Create plans and work with your Tidigar Cloud plans",
+        "longDescription": "Plan with your AI assistant. Create a plan as a share link without a Tidigar account, or connect your assistant to read and update your organisation’s plans in Tidigar Cloud or Tidigar Server. Share links carry a separate copy; updates to stored plans keep everyone working on the same plan.",
         "developerName": "Hamacher Software AB",
         "category": "Productivity",
         "websiteURL": "https://tidigar.com",
