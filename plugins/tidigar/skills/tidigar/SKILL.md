@@ -137,11 +137,14 @@ Tidigar Cloud, and a company's own Tidigar Server, store plans for an organisati
 
 Use the first mode that works:
 
-1. **CLI:** `tidigar status` exits 0. It keeps the token in the system's credential store.
-2. **HTTP:** `TIDIGAR_TOKEN` is set and you can make HTTPS requests; see [over HTTP](#stored-plans-over-http).
-3. **Neither:** build a share link. Tell the user to create a token in Tidigar under the account menu, **Agent access**, then run `tidigar login` themselves or set `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file.
+1. **MCP:** your tools include `tidigar_get_plan`. The steps below map to the tools `tidigar_list_plans`, `tidigar_get_plan`, `tidigar_validate_plan`, `tidigar_create_plan` (`plan` or `project`, `newId`) and `tidigar_update_plan` (`id`, `revision`, `project`); errors carry the same codes.
+2. **CLI:** `tidigar status` exits 0. It keeps the token in the system's credential store.
+3. **HTTP:** `TIDIGAR_TOKEN` is set and you can make HTTPS requests; see [over HTTP](#stored-plans-over-http).
+4. **None:** build a share link. Tell the user to create a token in Tidigar under the account menu, **Agent access**, then run `tidigar login` themselves or set `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file.
 
-Both modes use the same JSON and errors as the [public API](https://tidigar.com/agents/docs/api.md).
+With the CLI signed in, the user can add the MCP tools, for example `claude mcp add tidigar -- tidigar mcp` (`tidigar mcp --read-only` offers no writes).
+
+All modes use the same JSON and errors as the [public API](https://tidigar.com/agents/docs/api.md).
 
 - **New plan:** write `plan.json` as in [Plan](#plan), run `tidigar plans validate plan.json`, check its summary, then `tidigar plans create plan.json`. Answer with the plan's `url`, which opens it for signed-in members.
 - **Change a plan:** `tidigar plans list` shows each `id`, also the end of its `url`. `tidigar plans get <plan-id> --out plan.json` saves its `revision` and `project`. Edit `project` per the roadmap file format, keeping IDs and giving new records new UUIDs, then `tidigar plans update plan.json`.
