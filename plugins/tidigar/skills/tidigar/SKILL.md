@@ -137,7 +137,7 @@ Tidigar Cloud, and a company's own Tidigar Server, store plans for an organisati
 
 Use the first mode that works:
 
-1. **MCP:** your tools include `tidigar_get_plan`. The steps below map to the tools `tidigar_list_plans`, `tidigar_get_plan`, `tidigar_validate_plan`, `tidigar_create_plan` (`plan` or `project`, `newId`) and `tidigar_update_plan` (`id`, `revision`, `project`); errors carry the same codes.
+1. **MCP:** your tools include `tidigar_get_plan`. The steps below map to the tools `tidigar_list_plans`, `tidigar_get_plan`, `tidigar_validate_plan`, `tidigar_create_plan` (`plan` or `project`, `newId`) `tidigar_update_plan` (`id`, `revision`, `project`, `merge`) and `tidigar_resolve_merge` (`id`, `choices`); errors carry the same codes.
 2. **CLI:** `tidigar status` exits 0. It keeps the token in the system's credential store.
 3. **HTTP:** `TIDIGAR_TOKEN` is set and you can make HTTPS requests; see [over HTTP](#stored-plans-over-http).
 4. **None:** build a share link. Tell the user to create a token in Tidigar under the account menu, **Agent access**, then run `tidigar login` themselves or set `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file.
@@ -147,8 +147,9 @@ With the CLI signed in, the user can add the MCP tools, for example `claude mcp 
 All modes use the same JSON and errors as the [public API](https://tidigar.com/agents/docs/api.md).
 
 - **New plan:** write `plan.json` as in [Plan](#plan), run `tidigar plans validate plan.json`, check its summary, then `tidigar plans create plan.json`. Answer with the plan's `url`, which opens it for signed-in members.
-- **Change a plan:** `tidigar plans list` shows each `id`, also the end of its `url`. `tidigar plans get <plan-id> --out plan.json` saves its `revision` and `project`. Edit `project` per the roadmap file format, keeping IDs and giving new records new UUIDs, then `tidigar plans update plan.json`.
-- Exit 5 with `stale_revision`: the plan changed after you read it. Get it again, redo your edit and update again; never overwrite the other change.
+- **Change a plan:** `tidigar plans list` shows each `id`, also the end of its `url`. `tidigar plans get <plan-id> --out plan.json` saves its `revision` and `project`. Edit `project` per the roadmap file format, keeping IDs and giving new records new UUIDs, then `tidigar plans update plan.json --merge`.
+- Someone may save the plan while you work. `--merge` then combines both changes and saves. Exit 5 with `merge_conflicts` means both changed the same things and nothing was saved: stdout lists each conflict with an `id`, what it is `about`, the `change`, and the `base`, `mine` and `latest` values. Tell the user each conflict in plain words, ask which to keep, and never choose for them. Then run `tidigar plans resolve <mergeFile> --choices '{"c1":"mine","c2":"latest"}'` with an answer for every conflict. If it lists new conflicts, ask about those the same way.
+- Exit 5 with `stale_revision`: the plan changed and could not be merged. Get it again, show the user what changed, redo your edit and update again; never overwrite the other change.
 - Exit 7 (`write_unknown`): the write may or may not be saved. Get the plan and report what it holds; never repeat a write blindly.
 - Exit 2: ask the user to run `tidigar login`. Exit 3: read-only token, viewer or no subscription. Exit 4: no such plan. Exit 5 with `plan_exists`: it already exists; `--new-id` saves a copy if the user wants one. Exit 6: too large.
 
