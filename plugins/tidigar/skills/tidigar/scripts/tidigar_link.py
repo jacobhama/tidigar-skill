@@ -315,8 +315,9 @@ def link(payload):
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
     fragment = "s=1." + base64.urlsafe_b64encode(deflate.compress(data) + deflate.flush()).decode().rstrip("=")
-    if len(fragment) > 1900:
-        raise ValueError(f"The roadmap is too large for a share link. It needs {len(fragment)} of 1900 characters; "
+    limit = 8000 if "t" in payload else 1900
+    if len(fragment) > limit:
+        raise ValueError(f"The roadmap is too large for a share link. It needs {len(fragment)} of {limit} characters; "
                          "shorten or drop descriptions and merge small activities.")
     return f"{OPENER}#{fragment}"
 
