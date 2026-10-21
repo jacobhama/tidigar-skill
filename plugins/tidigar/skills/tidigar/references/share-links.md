@@ -86,6 +86,7 @@ single day. Colors are six hexadecimal digits without `#`.
 | `y` | Year         | yes      | integer 1900–2200; the base of every date                |
 | `d` | Description  | no       | text, max 500 characters; default `""`                   |
 | `w` | Work days    | no       | `1` plans in work days; absent plans in calendar days    |
+| `r` | Key prefix   | no       | the reference key prefix, such as `LPP`; absent for none |
 | `m` | Dimensions   | no       | array of `[name, options]`, options `[name, color]`      |
 | `i` | Activities   | no       | array of activity tuples                                 |
 | `s` | Milestones   | no       | array of milestone tuples                                |
@@ -113,7 +114,7 @@ Missing lists are empty. At most 20 dimensions with 100 options each.
 ### Activity tuple
 
 ```text
-[title, start, length, description, progress, values, dependsOn, startAfter]
+[title, start, length, description, progress, values, dependsOn, startAfter, ref]
 ```
 
 | Position | Field         | Value                                            |
@@ -126,6 +127,7 @@ Missing lists are empty. At most 20 dimensions with 100 options each.
 | 5        | `values`      | option numbers in dimension order; default `[]`  |
 | 6        | `dependsOn`   | predecessor indices; see below                   |
 | 7        | `startAfter`  | share per predecessor; default `[]`              |
+| 8        | `ref`         | reference key, max 32 characters; default `""`   |
 
 Trailing default positions MAY be left out, and trailing `0` entries in
 `values` MAY be left out. A missing value and `0` mean the same: no option.
@@ -154,8 +156,10 @@ rules above; it does not reschedule activities against the work calendar.
 ### Milestone and period tuples
 
 ```text
-[title, date, dependsOn, fixed]  milestone: dependsOn holds activity indices,
-                                    fixed is 1 or 0, default 0
+[title, date, dependsOn, fixed, ref]
+                                    milestone: dependsOn holds activity indices,
+                                    fixed is 1 or 0, default 0; ref as an
+                                    activity's, default ""
 [title, start, length, color, vacation]
                                     period band: vacation is 1 or 0, default 1
 ```
@@ -166,17 +170,21 @@ wait for, has `fixed` 1 and an empty `dependsOn`; a trailing 0 MAY be left
 out. Titles are 1–180 characters. In a roadmap planned in work days,
 a period with `vacation` 1 has no work days; a trailing 1 MAY be left out.
 
+An activity's or a milestone's `ref` and the payload's `r` are the
+[reference keys](https://tidigar.com/agents/docs/file-format.md#reference-keys) and their prefix. A link
+keeps them as they are, duplicates included; a trailing `""` MAY be left out.
+
 ### View object
 
 A view uses the saved-view fields of the [model specification](https://tidigar.com/agents/docs/file-format.md#saved-view)
 except `id`, `projectId`, `hideTimelineLabels` and `showAssignee`, with these changes:
 
-| Field                                       | Value in a link                                                                 |
-| ------------------------------------------- | ------------------------------------------------------------------------------- |
-| `row`, `col`, `color`, `group`, `flowGroup` | dimension index, or `""` for none                                               |
-| `filters`                                   | object: dimension index as key → option number                                  |
-| `colorOverrides`                            | object: `"<dimension index>.<option index>"` → color                            |
-| `listColumns`, `listColumnOrder`            | `"title"`, `"duration"`, `"start"`, `"end"`, `"dependsOn"` or a dimension index |
+| Field                                                              | Value in a link                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `row`, `col`, `color`, `group`, `flowGroup`, `timelineSummarizeBy` | dimension index, or `""` for none                                               |
+| `filters`                                                          | object: dimension index as key → option number                                  |
+| `colorOverrides`                                                   | object: `"<dimension index>.<option index>"` → color                            |
+| `listColumns`, `listColumnOrder`                                   | `"title"`, `"duration"`, `"start"`, `"end"`, `"dependsOn"` or a dimension index |
 
 A link never carries assignments or assignee settings. The assignee axis of
 `row`, `col` or `group` is written as `""`, and a decoder ignores
@@ -327,3 +335,11 @@ Instructions for AI agents, with this encoder and a worked example, are at
 Saved views may include `timelineShowWeeks` and `timelineShowQuarters`,
 boolean values defaulting to `true`. A `false` value excludes that level from
 the adaptive timeline header without fixing the remaining scale levels.
+`timelineWeekNumbers`, also defaulting to `true`, labels weeks with their
+first date instead of their number when `false`.
+`timelineMilestoneMode` may be `flag`, and `timelineMilestonesBesideWork`,
+defaulting to `false`, places each milestone that waits for shown activities
+in the row of the one that ends last. `timelineSummarizeBy` adds summary rows
+by that dimension within each timeline group. A link never says which
+summaries are collapsed; a reader ignores a `timelineCollapsedSummaries` field
+that an older link may still carry.

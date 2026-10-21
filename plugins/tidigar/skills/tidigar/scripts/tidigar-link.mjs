@@ -58,7 +58,7 @@ const scope = { crypto: globalThis.crypto };
   const RESOLUTIONS = new Set(['year', 'quarter', 'month', 'week']);
   const TEXT_MODES = new Set(['hide', 'beside', 'run-past', 'fit', 'under', 'wrapped']);
   const ACTIVITY_ROW_MODES = new Set(['single', 'single-label', 'compact']);
-  const MILESTONE_MODES = new Set(['hide', 'marker', 'label']);
+  const MILESTONE_MODES = new Set(['hide', 'marker', 'label', 'flag']);
   const WEEK_DAY_MODES = new Set(['work', 'all']);
   const DEPENDENCY_ARROW_MODES = new Set(['none', 'grouped', 'every']);
   const FLOW_DIRECTIONS = new Set(['auto', 'horizontal', 'vertical']);
@@ -124,6 +124,8 @@ const scope = { crypto: globalThis.crypto };
   const MAX_MILESTONES = 1000;
   const MAX_PERIOD_INDICATORS = 1000;
   const MAX_VIEWS = 99;
+  const MAX_REF_LENGTH = 32;
+  const REF_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
 
   function invalid(path, message) {
     throw new TypeError(`Invalid ${path}${message ? `: ${message}` : ''}`);
@@ -408,6 +410,12 @@ const scope = { crypto: globalThis.crypto };
     const schedule = source.schedule === undefined ? 'calendar-days' : source.schedule;
     if (!SCHEDULES.has(schedule))
       invalid('manifest.schedule', 'must be calendar-days or work-days');
+    const refPrefix = source.refPrefix === undefined ? '' : source.refPrefix;
+    if (typeof refPrefix !== 'string' || (refPrefix && !REF_PREFIX_PATTERN.test(refPrefix)))
+      invalid(
+        'manifest.refPrefix',
+        'must be up to 10 capital letters A to Z and digits, starting with a letter',
+      );
     return {
       projectId,
       formatVersion: 1,
@@ -417,6 +425,8 @@ const scope = { crypto: globalThis.crypto };
       year: source.year,
       schedule,
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
+      // Only a project with reference keys carries its prefix (ADR-423).
+      ...(refPrefix ? { refPrefix } : {}),
     };
   }
 
@@ -581,9 +591,11 @@ const scope = { crypto: globalThis.crypto };
       const values = normalizeValues(source.values, context, `${path}.values`);
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
+      const ref = refValue(source.ref, `${path}.ref`);
       const record = { id, projectId, title, description, progress, start, end, values, dependsOn };
       // Only an activity that overlaps another carries the field.
       if (Object.keys(startAfter).length) record.startAfter = startAfter;
+      if (ref) record.ref = ref;
       return record;
     });
     // A whole project checks dependencies once its milestones are known.
@@ -674,6 +686,11 @@ const scope = { crypto: globalThis.crypto };
         `${path}.flowGroup`,
       );
       const group = normalizeAxisReference(source.group, dimensions, `${path}.group`);
+      const timelineSummarizeBy = normalizeDimensionReference(
+        source.timelineSummarizeBy,
+        dimensions,
+        `${path}.timelineSummarizeBy`,
+      );
       const resolution = source.resolution === undefined ? 'month' : source.resolution;
       if (!RESOLUTIONS.has(resolution)) invalid(`${path}.resolution`, 'has an unsupported value');
       const timelineScaleRows =
@@ -755,6 +772,11 @@ const scope = { crypto: globalThis.crypto };
           `${path}.timelineShowQuarters`,
           true,
         ),
+        timelineWeekNumbers: booleanValue(
+          source.timelineWeekNumbers,
+          `${path}.timelineWeekNumbers`,
+          true,
+        ),
         timelineShowToday: booleanValue(
           source.timelineShowToday,
           `${path}.timelineShowToday`,
@@ -793,9 +815,16 @@ const scope = { crypto: globalThis.crypto };
         ),
         flowHideDates: booleanValue(source.flowHideDates, `${path}.flowHideDates`, false),
         showAssignee: booleanValue(source.showAssignee, `${path}.showAssignee`, true),
+        showRefs: booleanValue(source.showRefs, `${path}.showRefs`, false),
         timelineActivityRows,
         hideTimelineLabels,
         timelineMilestoneMode,
+        timelineMilestonesBesideWork: booleanValue(
+          source.timelineMilestonesBesideWork,
+          `${path}.timelineMilestonesBesideWork`,
+          false,
+        ),
+        timelineSummarizeBy,
         timelineWeekDays,
         timelineDependencyArrows,
         flowDirection,
@@ -818,6 +847,73 @@ const scope = { crypto: globalThis.crypto };
         ),
       };
     });
+  }
+
+  // A reference key is free text a person may change at any time; an empty
+  // one is left out of the record (ADR-423).
+  function refValue(value, path) {
+    return value === undefined ? '' : stringValue(value, path, MAX_REF_LENGTH, false);
+  }
+
+  /*
+   * The prefix a project's reference keys start with, from its name: the
+   * initials of two or three words, otherwise the first two letters. Letters
+   * fold to A–Z and anything else is left out, so a name without Latin
+   * letters gives no prefix (ADR-423).
+   */
+  function refPrefixFromName(name) {
+    const fold = (text) =>
+      String(text ?? '')
+        .normalize('NFKD')
+        .replace(/\p{M}/gu, '')
+        .replace(/[ßẞ]/g, 'SS')
+        .replace(/[ÆæǼǽ]/g, 'AE')
+        .replace(/[Œœ]/g, 'OE')
+        .replace(/[Øø]/g, 'O')
+        .replace(/[Łł]/g, 'L')
+        .replace(/[ĐđÐð]/g, 'D')
+        .replace(/[Þþ]/g, 'TH')
+        .replace(/ı/g, 'I')
+        .toUpperCase()
+        .replace(/[^A-Z]/g, '');
+    const words = String(name ?? '')
+      .split(/\s+/)
+      .map(fold)
+      .filter(Boolean);
+    const prefix =
+      words.length === 2 || words.length === 3
+        ? words.map((word) => word[0]).join('')
+        : fold(name).slice(0, 2);
+    return REF_PREFIX_PATTERN.test(prefix) ? prefix : '';
+  }
+
+  /*
+   * The next reference key with `prefix`: one more than the highest number
+   * any activity or milestone already uses with it, so keys are never reused
+   * while their records remain. Without a prefix there is none.
+   */
+  function nextRef(project, prefix = project?.manifest?.refPrefix || '') {
+    if (!prefix) return '';
+    const pattern = new RegExp(`^${prefix}-(\\d{1,9})$`, 'i');
+    let highest = 0;
+    for (const record of [...(project.items || []), ...(project.milestones || [])]) {
+      const match = pattern.exec(String(record.ref || '').trim());
+      if (match) highest = Math.max(highest, Number(match[1]));
+    }
+    return `${prefix}-${highest + 1}`;
+  }
+
+  /* The IDs of activities and milestones whose key another record also has. */
+  function duplicateRefs(project) {
+    const owners = new Map();
+    for (const record of [...(project?.items || []), ...(project?.milestones || [])]) {
+      const key = String(record.ref || '')
+        .trim()
+        .toUpperCase();
+      if (!key) continue;
+      owners.set(key, [...(owners.get(key) || []), record.id]);
+    }
+    return new Set([...owners.values()].filter((ids) => ids.length > 1).flat());
   }
 
   function booleanValue(value, path, fallback) {
@@ -847,7 +943,8 @@ const scope = { crypto: globalThis.crypto };
         if (!byItemId.has(dependency))
           invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
       }
-      return { id, projectId, title, date, dependsOn, fixed };
+      const ref = refValue(source.ref, `${path}.ref`);
+      return { id, projectId, title, date, dependsOn, fixed, ...(ref ? { ref } : {}) };
     });
   }
 
@@ -1163,6 +1260,10 @@ const scope = { crypto: globalThis.crypto };
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
     startThreshold,
+    maxRefLength: MAX_REF_LENGTH,
+    refPrefixFromName,
+    nextRef,
+    duplicateRefs,
     normalizeProject,
     copyAsNewProject,
     normalizeManifest,
@@ -1213,15 +1314,24 @@ const scope = { crypto: globalThis.crypto };
   const MAX_INFLATED_BYTES = 262144;
   const DAY = 86400000;
   // A link never carries assignee settings: a copy is no Tidigar Cloud plan,
-  // so it has no assignees to arrange or show.
+  // so it has no assignees to arrange or show. Collapsed timeline summaries
+  // are personal; an older link that still carries them opens without them.
   const OMITTED_VIEW_FIELDS = new Set([
     'id',
     'projectId',
     'name',
     'hideTimelineLabels',
     'showAssignee',
+    'timelineCollapsedSummaries',
   ]);
-  const DIMENSION_FIELDS = new Set(['row', 'col', 'color', 'group', 'flowGroup']);
+  const DIMENSION_FIELDS = new Set([
+    'row',
+    'col',
+    'color',
+    'group',
+    'flowGroup',
+    'timelineSummarizeBy',
+  ]);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
 
   class ShareLinkError extends Error {
@@ -1537,6 +1647,7 @@ const scope = { crypto: globalThis.crypto };
       const payload = { n: manifest.name, y: manifest.year };
       if (manifest.description) payload.d = manifest.description;
       if (manifest.schedule === 'work-days') payload.w = 1;
+      if (manifest.refPrefix) payload.r = manifest.refPrefix;
       if (manifest.dimensions.length)
         payload.m = manifest.dimensions.map((dimension) => [
           dimension.name,
@@ -1557,8 +1668,9 @@ const scope = { crypto: globalThis.crypto };
                 item.dependsOn.map((id) => item.startAfter?.[id] ?? 100),
                 item.dependsOn.map(() => 100),
               ),
+              item.ref ?? '',
             ],
-            [null, null, null, '', 0, [], [], []],
+            [null, null, null, '', 0, [], [], [], ''],
           ),
         );
       if (project.milestones.length)
@@ -1569,8 +1681,9 @@ const scope = { crypto: globalThis.crypto };
               day(milestone.date),
               dependencies(milestone.dependsOn),
               milestone.fixed ? 1 : 0,
+              milestone.ref ?? '',
             ],
-            [null, null, [], 0],
+            [null, null, [], 0, ''],
           ),
         );
       if (project.periodIndicators.length)
@@ -1743,10 +1856,20 @@ const scope = { crypto: globalThis.crypto };
           dimensions,
           year,
           schedule: payload.w === undefined ? 'calendar-days' : payload.w === 1 ? 'work-days' : '',
+          ...(payload.r === undefined ? {} : { refPrefix: payload.r }),
         },
         items: packedItems.map((entry, index) => {
-          const [title, start, length, description = '', progress = 0, values, dependsOn, parts] =
-            entry;
+          const [
+            title,
+            start,
+            length,
+            description = '',
+            progress = 0,
+            values,
+            dependsOn,
+            parts,
+            ref = '',
+          ] = entry;
           const choices = list(values);
           const predecessorIds = list(dependsOn).map((position) => at(predecessors, position));
           const shares = list(parts);
@@ -1777,13 +1900,14 @@ const scope = { crypto: globalThis.crypto };
             ),
             dependsOn: predecessorIds,
             ...(Object.keys(startAfter).length ? { startAfter } : {}),
+            ...(ref === '' ? {} : { ref }),
           };
         }),
         sharedViews: list(payload.v).map((packed, index) =>
           own({ ...unpackView(packed), name: packed.name }, like?.sharedViews[index]),
         ),
         milestones: list(payload.s).map((entry, index) => {
-          const [title, day, dependsOn, fixed = 0] = list(entry);
+          const [title, day, dependsOn, fixed = 0, ref = ''] = list(entry);
           if (fixed !== 0 && fixed !== 1)
             fail('invalid', 'The share link has an invalid milestone.');
           return {
@@ -1793,6 +1917,7 @@ const scope = { crypto: globalThis.crypto };
             date: date(day),
             dependsOn: dependencies(dependsOn),
             fixed: fixed === 1,
+            ...(ref === '' ? {} : { ref }),
           };
         }),
         periodIndicators: list(payload.p).map((entry, index) => {
