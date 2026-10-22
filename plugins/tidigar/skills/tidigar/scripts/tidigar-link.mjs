@@ -56,7 +56,7 @@ const scope = { crypto: globalThis.crypto };
   const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
   const VIEWS = new Set(['grid', 'timeline', 'list', 'flow']);
   const RESOLUTIONS = new Set(['year', 'quarter', 'month', 'week']);
-  const TEXT_MODES = new Set(['hide', 'beside', 'run-past', 'fit', 'under', 'wrapped']);
+  const TEXT_MODES = new Set(['hide', 'beside', 'run-past', 'fit', 'under']);
   const ACTIVITY_ROW_MODES = new Set(['single', 'single-label', 'compact']);
   const MILESTONE_MODES = new Set(['hide', 'marker', 'label', 'flag']);
   const WEEK_DAY_MODES = new Set(['work', 'all']);
@@ -79,6 +79,7 @@ const scope = { crypto: globalThis.crypto };
       clip: 'beside',
       overflow: 'beside',
       wrap: 'beside',
+      wrapped: 'under',
     }),
     // Every earlier choice reads as the arrows within groups, the default
     // since 2026-10-02; no arrows is now `none`.
