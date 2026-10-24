@@ -2141,8 +2141,10 @@ const scope = { crypto: globalThis.crypto };
 
     // The checks before inflating: the version, the length and the alphabet.
     // Returns the link's data.
+    // Parameters after the data, such as a screen copy's `&k=`, are not
+    // part of the link (ADR-443).
     function readFragment(fragment) {
-      const text = typeof fragment === 'string' ? fragment.replace(/^#/, '') : '';
+      const text = typeof fragment === 'string' ? fragment.replace(/^#/, '').split('&')[0] : '';
       const match = /^s=(\d+)\.(.*)$/s.exec(text);
       if (!match) fail('not-share-link', 'This is not a share link.');
       if (match[1] !== String(VERSION))
@@ -2224,13 +2226,18 @@ const scope = { crypto: globalThis.crypto };
   /* The HTML a blog pastes: the embed frame and a plain link that still
      works where a platform removes frames. A page that is always dark or
      always light passes `theme`, which the embed keeps whatever the reader's
-     setting; it goes in the frame's name, so the address stays the same. */
-  function embedCode(fragment, { title, linkText, theme = null }) {
+     setting; it goes in the frame's name, so the address stays the same.
+     `href` is where the plain link goes: the opener by default, the screen
+     link itself for a screen link (ADR-441). */
+  function embedCode(
+    fragment,
+    { title, linkText, theme = null, href = `${OPENER_URL}#${fragment}` },
+  ) {
     const name = theme === 'dark' || theme === 'light' ? ` name="tidigar-theme-${theme}"` : '';
     return (
       `<iframe src="${EMBED_URL}#${fragment}"${name} title="${escapeHTML(title)}" width="100%" ` +
       `height="480" style="border:0;max-width:100%" loading="lazy"></iframe>\n` +
-      `<p><a href="${OPENER_URL}#${fragment}">${escapeHTML(linkText)}</a></p>\n` +
+      `<p><a href="${escapeHTML(href)}">${escapeHTML(linkText)}</a></p>\n` +
       // Sets the iframe to the height of its roadmap; without it the height
       // above applies. The escaped slash keeps this source inline in HTML.
       `<script async src="${EMBED_URL}embed.js"><\/script>`
@@ -2797,10 +2804,11 @@ const PLAN_LABELS = { i: 'activities', s: 'milestones', p: 'periods', v: 'views'
 
 const { inPlanTerms, describe } = planFormat;
 
+// Parameters after the data, such as a screen's token `&k=`, are left out.
 function fragmentOf(link) {
   const text = String(link).trim();
   const hash = text.indexOf('#');
-  return hash < 0 ? text : text.slice(hash + 1);
+  return (hash < 0 ? text : text.slice(hash + 1)).split('&')[0];
 }
 
 /** Turn a plan into the share-link payload it makes; a payload is returned as is. */

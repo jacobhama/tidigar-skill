@@ -323,7 +323,7 @@ def link(payload):
 
 def read(url):
     """A link's roadmap as a plan, to change and build again. Saved views are left out."""
-    data = url.split("#", 1)[-1].split("s=1.", 1)[1]
+    data = url.split("#", 1)[-1].split("&", 1)[0].split("s=1.", 1)[1]
     payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)), -15))
     base = datetime.date(payload["y"], 1, 1).toordinal()
     dims, rows, marks = payload.get("m", []), payload.get("i", []), payload.get("s", [])

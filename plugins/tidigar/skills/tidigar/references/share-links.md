@@ -49,6 +49,11 @@ https://open.tidigar.com/s#s=1.<data>
   encoder MUST refuse a larger roadmap rather than drop content.
 - The fragment is never sent to a server by browsers, so the roadmap stays
   between the sender and the recipient.
+- Tidigar MAY add parameters after the data, as `&<name>=<value>` with
+  one-letter names, such as `&k=<token>` on a copy opened from a published
+  screen. They are not part of the share link and do not count towards its
+  1,900 characters. A decoder MUST read only `s=1.<data>` and ignore what
+  follows the first `&`.
 
 Tidigar keeps opening version 1 links. A change that a version 1 decoder
 cannot read gets a new version number, and version 1 stays readable.
