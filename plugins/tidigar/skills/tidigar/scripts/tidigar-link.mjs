@@ -1021,6 +1021,34 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
+  /**
+   * Whether a view shows an activity: every set filter matches and the
+   * search finds its text in the activity's reference key, title,
+   * description or dimension values (ADR-423). The editor, screens and
+   * screen-link snapshots share this test.
+   */
+  function activityMatcher({ filters = {}, query = '' } = {}, dimensions = [], locale) {
+    const set = Object.entries(filters || {}).filter(([, option]) => option);
+    const search = String(query || '').toLocaleLowerCase(locale);
+    const names = dimensions.map((dimension) => [
+      dimension.id,
+      new Map(dimension.options.map((choice) => [choice.id, choice.name])),
+    ]);
+    return (item) =>
+      set.every(([dimension, option]) => item.values[dimension] === option) &&
+      (!search ||
+        (
+          (item.ref ? `${item.ref} ` : '') +
+          item.title +
+          ' ' +
+          item.description +
+          ' ' +
+          names.map(([id, options]) => options.get(item.values[id]) || '').join(' ')
+        )
+          .toLocaleLowerCase(locale)
+          .includes(search));
+  }
+
   /** JSON encode a normalized complete project. */
   function serializeProject(project) {
     return JSON.stringify(normalizeProject(project));
@@ -1267,6 +1295,7 @@ const scope = { crypto: globalThis.crypto };
     duplicateRefs,
     normalizeProject,
     copyAsNewProject,
+    activityMatcher,
     normalizeManifest,
     normalizeItems,
     normalizeViews,
@@ -1308,10 +1337,6 @@ const scope = { crypto: globalThis.crypto };
   // The whole link stays within 2,000 characters for any Tidigar origin and
   // path of up to 100 characters.
   const MAX_FRAGMENT_LENGTH = 1900;
-  // A link that carries a story may be longer (ADR-406); its story text
-  // keeps the story language's own limit.
-  const MAX_STORY_FRAGMENT_LENGTH = 8000;
-  const MAX_STORY_LENGTH = 65536;
   const MAX_INFLATED_BYTES = 262144;
   const DAY = 86400000;
   // A link never carries assignee settings: a copy is no Tidigar Cloud plan,
@@ -1347,9 +1372,6 @@ const scope = { crypto: globalThis.crypto };
   function fail(code, message, details) {
     throw new ShareLinkError(code, message, details);
   }
-
-  const validStory = (story) =>
-    typeof story === 'string' && story.length > 0 && story.length <= MAX_STORY_LENGTH;
 
   function dayNumber(date) {
     return Date.parse(`${date}T00:00:00Z`) / DAY;
@@ -2042,29 +2064,66 @@ const scope = { crypto: globalThis.crypto };
     }
 
     /**
+     * What a screen link shows of one saved view (ADR-375, ADR-376), or null
+     * when the plan has no such view: the activities its filters and search
+     * show, with no descriptions, no other saved views and only the
+     * dimensions the view arranges, colors or lists by. Reference keys stay
+     * only where the view shows them. Filters and search are applied here,
+     * so the snapshot's view carries neither.
+     */
+    function screenSnapshot(projectInput, viewId, { locale } = {}) {
+      const source = model.normalizeProject(projectInput);
+      const chosen = source.sharedViews.find((view) => view.id === viewId);
+      if (!chosen) return null;
+      const shown = model.activityMatcher(chosen, source.manifest.dimensions, locale);
+      const { project } = reduce(source, null, {
+        visibleItemIds: source.items.filter(shown).map((item) => item.id),
+        withoutDescriptions: true,
+      });
+      const view = { ...chosen, filters: {}, query: '' };
+      const used = new Set([...DIMENSION_FIELDS].map((key) => view[key]).filter(Boolean));
+      if (view.view === 'list') for (const column of view.listColumns) used.add(column);
+      project.manifest.dimensions = project.manifest.dimensions.filter((dimension) =>
+        used.has(dimension.id),
+      );
+      for (const item of project.items)
+        item.values = Object.fromEntries(
+          Object.entries(item.values).filter(([id]) => used.has(id)),
+        );
+      const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
+      for (const key of COLUMN_FIELDS)
+        view[key] = view[key].filter(
+          (column) =>
+            ['title', 'duration', 'start', 'end', 'dependsOn'].includes(column) ||
+            known.has(column),
+        );
+      delete project.manifest.shareLinkCreatedAt;
+      if (!view.showRefs) {
+        delete project.manifest.refPrefix;
+        for (const record of [...project.items, ...project.milestones]) delete record.ref;
+      }
+      project.sharedViews = [view];
+      const snapshot = model.normalizeProject(project);
+      return { project: snapshot, view: snapshot.sharedViews[0] };
+    }
+
+    /**
      * Encode a project and an optional initial view configuration as a
      * fragment such as `s=1.…`, without the leading `#`. Throws a
      * `ShareLinkError` with code `too-large` (and `length`, `limit`) when
      * the result exceeds the limit; nothing is ever truncated. New links get
      * their creation time in UTC, independent of the source copy's metadata.
-     * `createdAt: null` omits it for deterministic static templates. A
-     * `story` in the story language travels in the link and allows the
-     * longer limit (ADR-406).
+     * `createdAt: null` omits it for deterministic static templates.
      */
     async function encode(
       project,
       initialView = null,
-      { createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), story = null } = {},
+      { createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') } = {},
     ) {
       const payload = pack(project, initialView);
       if (createdAt !== null) {
         model.normalizeManifest({ ...project.manifest, shareLinkCreatedAt: createdAt });
         payload.c = createdAt;
-      }
-      if (story !== null) {
-        if (!validStory(story))
-          throw new TypeError(`A story must be text of 1 to ${MAX_STORY_LENGTH} characters.`);
-        payload.t = story;
       }
       const json = JSON.stringify(payload);
       const bytes = await readAll(
@@ -2072,64 +2131,51 @@ const scope = { crypto: globalThis.crypto };
         Infinity,
       );
       const fragment = PREFIX + toBase64Url(bytes);
-      const limit = story === null ? MAX_FRAGMENT_LENGTH : MAX_STORY_FRAGMENT_LENGTH;
-      if (fragment.length > limit)
+      if (fragment.length > MAX_FRAGMENT_LENGTH)
         fail('too-large', 'The roadmap is too large for a share link.', {
           length: fragment.length,
-          limit,
+          limit: MAX_FRAGMENT_LENGTH,
         });
       return fragment;
     }
 
-    // The checks before inflating: the version, the longest any link may be
-    // and the alphabet. Returns the text and its data.
+    // The checks before inflating: the version, the length and the alphabet.
+    // Returns the link's data.
     function readFragment(fragment) {
       const text = typeof fragment === 'string' ? fragment.replace(/^#/, '') : '';
       const match = /^s=(\d+)\.(.*)$/s.exec(text);
       if (!match) fail('not-share-link', 'This is not a share link.');
       if (match[1] !== String(VERSION))
         fail('unsupported-version', 'This share link needs a newer version of Tidigar.');
-      if (text.length > MAX_STORY_FRAGMENT_LENGTH)
-        fail('too-large', 'The share link is too long.', {
-          length: text.length,
-          limit: MAX_STORY_FRAGMENT_LENGTH,
-        });
-      if (!/^[A-Za-z0-9_-]+$/.test(match[2])) fail('corrupt', 'The share link is damaged.');
-      return { text, data: match[2] };
-    }
-
-    // After inflating: only a link with a story may pass the shorter limit.
-    function readPayload(text, payload, options) {
-      const story = payload && typeof payload === 'object' ? payload.t : undefined;
-      if (story === undefined && text.length > MAX_FRAGMENT_LENGTH)
+      if (text.length > MAX_FRAGMENT_LENGTH)
         fail('too-large', 'The share link is too long.', {
           length: text.length,
           limit: MAX_FRAGMENT_LENGTH,
         });
-      if (story !== undefined && !validStory(story))
-        fail('invalid', 'The share link holds an invalid story.');
-      let result;
+      if (!/^[A-Za-z0-9_-]+$/.test(match[2])) fail('corrupt', 'The share link is damaged.');
+      return match[2];
+    }
+
+    function readPayload(payload, options) {
       try {
-        result = unpack(payload, options);
+        return unpack(payload, options);
       } catch (error) {
         if (error instanceof ShareLinkError) throw error;
         fail('invalid', `The share link holds an invalid roadmap. ${error.message}`);
       }
-      return story === undefined ? result : { ...result, story };
     }
 
     /**
      * Decode a fragment (with or without `#`) into `{ project, view }`: a
      * validated project under new IDs and the normalized initial view, or
-     * `null`; `options.like` keeps that project's IDs (see `unpack`). A link
-     * with a story also gives its text as `story`. Error codes:
+     * `null`; `options.like` keeps that project's IDs (see `unpack`). Error codes:
      * `not-share-link`, `unsupported-version`, `too-large`, `corrupt`,
      * `invalid`. A configured `repairDates` callback may correct dependency
      * dates; a repaired result also includes `{ collection, id, fields }[]`
      * in `repairs`. Strict validation is always tried first.
      */
     async function decode(fragment, options) {
-      const { text, data } = readFragment(fragment);
+      const data = readFragment(fragment);
       let payload;
       try {
         const bytes = await readAll(
@@ -2141,7 +2187,7 @@ const scope = { crypto: globalThis.crypto };
         if (error instanceof ShareLinkError) throw error;
         fail('corrupt', 'The share link is damaged.');
       }
-      return readPayload(text, payload, options);
+      return readPayload(payload, options);
     }
 
     /**
@@ -2149,7 +2195,7 @@ const scope = { crypto: globalThis.crypto };
      * wait and for engines without streams, such as the apps' model runtime.
      */
     function decodeSync(fragment, options) {
-      const { text, data } = readFragment(fragment);
+      const data = readFragment(fragment);
       let payload;
       try {
         payload = JSON.parse(utf8Text(inflateRaw(base64UrlBytes(data), MAX_INFLATED_BYTES)));
@@ -2157,10 +2203,10 @@ const scope = { crypto: globalThis.crypto };
         if (error instanceof ShareLinkError) throw error;
         fail('corrupt', 'The share link is damaged.');
       }
-      return readPayload(text, payload, options);
+      return readPayload(payload, options);
     }
 
-    return { encode, decode, decodeSync, pack, unpack, reduce };
+    return { encode, decode, decodeSync, pack, unpack, reduce, screenSnapshot };
   }
 
   // Public addresses (ADR-077, ADR-078): the opener that makes a copy in the
@@ -2197,8 +2243,6 @@ const scope = { crypto: globalThis.crypto };
     ShareLinkError,
     VERSION,
     MAX_FRAGMENT_LENGTH,
-    MAX_STORY_FRAGMENT_LENGTH,
-    MAX_STORY_LENGTH,
     MAX_INFLATED_BYTES,
     OPENER_URL,
     EMBED_URL,
@@ -2744,7 +2788,6 @@ const codec = shareLink.createFactory({ model });
 
 export const OPENER_URL = shareLink.OPENER_URL;
 export const MAX_FRAGMENT_LENGTH = shareLink.MAX_FRAGMENT_LENGTH;
-export const MAX_STORY_FRAGMENT_LENGTH = shareLink.MAX_STORY_FRAGMENT_LENGTH;
 export const PLAN_SCHEMA = planFormat.SCHEMA;
 
 // A summary and an error name records the way the input does: by their
@@ -2769,24 +2812,21 @@ export function toPayload(input) {
 /**
  * Validate a plan or a share-link payload and build its link. Returns `{
  * url, fragment, length, limit, summary, payload }`, where `length` is the
- * fragment's length against `limit`: `MAX_FRAGMENT_LENGTH`, or
- * `MAX_STORY_FRAGMENT_LENGTH` for a link with a story. A story comes from
- * `options.story` or a payload's `t`. Throws an error whose message names
+ * fragment's length against `limit`, `MAX_FRAGMENT_LENGTH`. Throws an error whose message names
  * the broken rule and the record, such as `activities[2] "Build"` for a plan
  * or `activity i[2] "Build"` for a payload.
  */
-export async function createLink(input, { createdAt, story } = {}) {
+export async function createLink(input, { createdAt } = {}) {
   if (typeof input === 'string') input = JSON.parse(input);
   const isPlan = planFormat.isPlan(input);
   const payload = toPayload(input);
-  story ??= isPlan ? null : (payload.t ?? null);
   let project, view;
   try {
     ({ project, view } = codec.unpack(payload));
   } catch (error) {
     throw isPlan ? inPlanTerms(error) : error;
   }
-  const fragment = await codec.encode(project, view, { createdAt, story }).catch((error) => {
+  const fragment = await codec.encode(project, view, { createdAt }).catch((error) => {
     if (error.code === 'too-large')
       error.message += ` It needs ${error.length} of ${error.limit} characters; shorten or drop descriptions and merge small activities.`;
     throw error;
@@ -2795,32 +2835,26 @@ export async function createLink(input, { createdAt, story } = {}) {
     url: `${OPENER_URL}#${fragment}`,
     fragment,
     length: fragment.length,
-    limit: story === null ? MAX_FRAGMENT_LENGTH : MAX_STORY_FRAGMENT_LENGTH,
+    limit: MAX_FRAGMENT_LENGTH,
     summary: describe(project, isPlan ? PLAN_LABELS : PAYLOAD_LABELS),
-    payload:
-      story === null ? codec.pack(project, view) : { ...codec.pack(project, view), t: story },
+    payload: codec.pack(project, view),
   };
 }
 
 /**
  * Read a Tidigar link, or its fragment, into `{ plan, payload, summary,
- * lost }`, and `story` for a link with one. `plan` holds the roadmap as a
- * plan to edit and rebuild; `lost` names what the plan cannot carry, such
- * as saved views or the story, which the `payload` keeps.
+ * lost }`. `plan` holds the roadmap as a plan to edit and rebuild; `lost`
+ * names what the plan cannot carry, such as saved views, which the
+ * `payload` keeps.
  */
 export async function readLink(link, { labels = 'plan' } = {}) {
-  const { project, view, story } = await codec.decode(fragmentOf(link));
+  const { project, view } = await codec.decode(fragmentOf(link));
   const payload = codec.pack(project, view);
   const { plan, lost } = planFormat.fromPayload(payload);
-  if (story !== undefined) {
-    payload.t = story;
-    lost.push('story');
-  }
   return {
     plan,
     payload,
     lost,
-    ...(story === undefined ? {} : { story }),
     summary: describe(project, labels === 'plan' ? PLAN_LABELS : PAYLOAD_LABELS),
   };
 }

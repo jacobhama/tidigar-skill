@@ -33,8 +33,6 @@ A whole share link is at most **2,000 characters**. That is a deliberate
 limit, not a technical accident: a shared roadmap is a small, useful starting
 plan that fits in a chat message, an email, a blog post or a QR code, and it
 opens anywhere Tidigar runs. Larger roadmaps are shared as project files.
-A link that also carries a [story](https://tidigar.com/agents/docs/stories.md) of how the roadmap changed
-is the one exception, with room for up to 8,000 characters in its fragment.
 
 ## Link format
 
@@ -47,9 +45,8 @@ https://open.tidigar.com/s#s=1.<data>
   ([RFC 1951](https://www.rfc-editor.org/rfc/rfc1951), no zlib or gzip header)
   and encoded as base64url without padding
   ([RFC 4648 §5](https://www.rfc-editor.org/rfc/rfc4648#section-5)).
-- The fragment including `s=1.` MUST be at most **1,900 characters**, or at
-  most **8,000 characters** when the payload has a story (`t`). An encoder
-  MUST refuse a larger roadmap rather than drop content.
+- The fragment including `s=1.` MUST be at most **1,900 characters**. An
+  encoder MUST refuse a larger roadmap rather than drop content.
 - The fragment is never sent to a server by browsers, so the roadmap stays
   between the sender and the recipient.
 
@@ -57,7 +54,7 @@ Tidigar keeps opening version 1 links. A change that a version 1 decoder
 cannot read gets a new version number, and version 1 stays readable.
 
 A decoder MUST reject another version, a fragment longer than its limit,
-an invalid story, characters outside
+characters outside
 `A–Z a–z 0–9 - _`, data that does not inflate, more than **262,144** inflated
 bytes or invalid JSON. A decoder MAY repair dependency date conflicts by
 moving activities and dependent milestones later, preserving activity duration,
@@ -93,7 +90,6 @@ single day. Colors are six hexadecimal digits without `#`.
 | `p` | Period bands | no       | array of period tuples                                   |
 | `v` | Saved views  | no       | array of view objects with a `name`                      |
 | `o` | Initial view | no       | one view object without `name`; default view if absent   |
-| `t` | Story        | no       | text, 1–65,536 characters, in the story language         |
 
 New sharing links carry `c`, the instant the link was created, for example
 `2026-10-05T12:30:00Z`. Readers preserve it as `manifest.shareLinkCreatedAt`
@@ -103,11 +99,6 @@ It is separate from storage modification times. Older links without `c` remain
 valid and do not acquire a timestamp. A new link from a copy gets a new `c`.
 There is no persistent publication identity, replacement or synchronization.
 Static templates may omit `c` when no sharing instant is known.
-
-A link with `t` carries a story of how the roadmap changes, written in the
-[embed story language](https://tidigar.com/agents/docs/stories.md). The payload's roadmap is where the
-story starts. A reader that does not play stories opens that roadmap and
-ignores `t`; a new link made from the copy has no story.
 
 Missing lists are empty. At most 20 dimensions with 100 options each.
 
