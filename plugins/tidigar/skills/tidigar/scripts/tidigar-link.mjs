@@ -2141,10 +2141,8 @@ const scope = { crypto: globalThis.crypto };
 
     // The checks before inflating: the version, the length and the alphabet.
     // Returns the link's data.
-    // Parameters after the data, such as a screen copy's `&k=`, are not
-    // part of the link (ADR-443).
     function readFragment(fragment) {
-      const text = typeof fragment === 'string' ? fragment.replace(/^#/, '').split('&')[0] : '';
+      const text = typeof fragment === 'string' ? fragment.replace(/^#/, '') : '';
       const match = /^s=(\d+)\.(.*)$/s.exec(text);
       if (!match) fail('not-share-link', 'This is not a share link.');
       if (match[1] !== String(VERSION))

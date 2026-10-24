@@ -14,7 +14,7 @@ Use this when a user asks for a roadmap, timeline, Gantt chart or project plan i
 ## Choose the right action
 
 - **Make a new plan without saving it to Cloud:** create a share link with the quick start below. The whole plan travels in the link; no Tidigar account or plan upload is needed. Anyone with the link can read it. Later edits to the original do not update the copy.
-- **Save, find, open or change a stored plan:** follow [Plans stored in Tidigar](#plans-stored-in-tidigar). Use this path for a `/p/<organisation>/<plan-id>` link, and keep the existing plan's identity when updating it.
+- **Save, find, open or change a stored plan:** follow [Plans stored in Tidigar](#plans-stored-in-tidigar). Use this path for a `/p/<code>` plan link, and keep the existing plan's identity when updating it.
 - **Give the user a link to a stored plan:** return that plan's `url`. Create a separate share-link copy only when they ask for a copy. If their intent is unclear, ask whether they want the shared plan or a separate copy.
 
 For a share link, prefer the JavaScript or Python builder. If neither can run, follow the published [share link specification](https://tidigar.com/agents/docs/share-links.md).
@@ -132,7 +132,7 @@ Always give the clickable link. Where you can render HTML, you may also show the
 
 ## Plans stored in Tidigar
 
-Tidigar Cloud and Tidigar Server keep plans for an organisation. Use this section when the user asks to save, list, open or change a stored plan, or gives a `/p/<organisation>/<plan-id>` link. A link to that plan opens the shared plan; a share link opens a separate copy.
+Tidigar Cloud and Tidigar Server keep plans for an organisation. Use this section when the user asks to save, list, open or change a stored plan, or gives a `/p/<code>` link. A link to that plan opens the shared plan; a share link opens a separate copy. The code is not the plan's id: list the organisation's plans and use the one whose `url` matches the link, ignoring anything after `?` or `#`.
 
 **A stored plan is not a share link.** Of everything above, only writing `plan.json` for a new plan applies:
 
