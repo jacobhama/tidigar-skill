@@ -2226,19 +2226,20 @@ const scope = { crypto: globalThis.crypto };
      always light passes `theme`, which the embed keeps whatever the reader's
      setting; it goes in the frame's name, so the address stays the same.
      `href` is where the plain link goes: the opener by default, the screen
-     link itself for a screen link (ADR-441). */
+     link itself for a screen link (ADR-441). `embedURL` selects the reader
+     and helper paired with that screen's deployment. */
   function embedCode(
     fragment,
-    { title, linkText, theme = null, href = `${OPENER_URL}#${fragment}` },
+    { title, linkText, theme = null, href = `${OPENER_URL}#${fragment}`, embedURL = EMBED_URL },
   ) {
     const name = theme === 'dark' || theme === 'light' ? ` name="tidigar-theme-${theme}"` : '';
     return (
-      `<iframe src="${EMBED_URL}#${fragment}"${name} title="${escapeHTML(title)}" width="100%" ` +
+      `<iframe src="${escapeHTML(embedURL)}#${fragment}"${name} title="${escapeHTML(title)}" width="100%" ` +
       `height="480" style="border:0;max-width:100%" loading="lazy"></iframe>\n` +
       `<p><a href="${escapeHTML(href)}">${escapeHTML(linkText)}</a></p>\n` +
       // Sets the iframe to the height of its roadmap; without it the height
       // above applies. The escaped slash keeps this source inline in HTML.
-      `<script async src="${EMBED_URL}embed.js"><\/script>`
+      `<script async src="${escapeHTML(embedURL)}embed.js"><\/script>`
     );
   }
 
