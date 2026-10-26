@@ -157,6 +157,7 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
 - Someone may save the plan while you work. `--merge` then combines both changes and saves. Exit 5 with `merge_conflicts` means both changed the same things and nothing was saved: stdout lists each conflict with an `id`, what it is `about`, the `change`, and the `base`, `mine` and `latest` values. Tell the user each conflict in plain words, ask which to keep, and never choose for them. Then run `tidigar plans resolve <mergeFile> --choices '{"c1":"mine","c2":"latest"}'` with an answer for every conflict. If it lists new conflicts, ask about those the same way.
 - Exit 5 with `stale_revision`: the plan changed and could not be merged. Get it again, show the user what changed, redo your edit and update again; never overwrite the other change.
 - **Delete a plan** only when the user asks, and confirm first by its name. `tidigar plans get <plan-id>` gives its `revision`; `tidigar plans delete <plan-id> --revision <n>` moves it to the trash, where it stays 30 days. Exit 5 with `stale_revision`: someone changed it since; get it again and ask again. `tidigar plans trash` lists deleted plans and `tidigar plans restore <plan-id>` brings one back.
+- **Screens:** a screen shows one saved view of a stored plan to anyone with its link, on a wall screen or a web page, and may play a story written in the [story language](https://tidigar.com/agents/docs/stories.md) with the plan's own titles and dates. `tidigar screens list <plan-id>` lists them. `tidigar screens create <plan-id> --view <view-id> --name <name> --story story.txt` makes one, `--name` and `--story` optional; ask the user first, since anyone with its link sees that view. `tidigar screens update <plan-id> <screen-id>` changes its `--story` file, `--name` or `--join-code on|off`. To change what a screen shows, update its saved view in the project and keep the view's `id`: deleting the view ends the screen. `tidigar screens link <plan-id> <screen-id>` prints its `url`; give it only to the user, never write it into a plan, a file or a public place. `tidigar screens delete <plan-id> <screen-id>` ends the link for good; confirm first. Exit 3 with `agent_screens_off`: the owners keep making screens and reading links to people.
 - Exit 7 (`write_unknown`): the write may or may not be saved. Get the plan and report what it holds; never repeat a write blindly.
 - Exit 2: ask the user to run `tidigar login`. Exit 3: read-only token, viewer or no subscription. Exit 4: no such plan. Exit 5 with `plan_exists`: it already exists; `--new-id` saves a copy if the user wants one. Exit 6: too large.
 
@@ -178,6 +179,9 @@ curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @merge.json "$API/organizat
 curl -sS -X DELETE -H "$AUTH" -H "If-Match: \"$REVISION\"" "$API/organizations/$ORG/plans/$PLAN_ID"
 curl -sS -H "$AUTH" "$API/organizations/$ORG/trash"
 curl -sS -X POST -H "$AUTH" "$API/organizations/$ORG/trash/$PLAN_ID/restore"
+curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens"
+curl -sS -X PATCH -H "$AUTH" -H "$JSON" --data-binary @screen.json "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID"
+curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID/link"
 ```
 
 - `GET /token`: `organization.id` is `ORG`; `writable` says whether you may save. `GET /organizations/:org/plans` lists plans.
