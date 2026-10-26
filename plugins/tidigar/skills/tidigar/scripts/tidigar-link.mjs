@@ -426,7 +426,7 @@ const scope = { crypto: globalThis.crypto };
       year: source.year,
       schedule,
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
-      // Only a project with reference keys carries its prefix (ADR-423).
+      // Only a project with reference keys carries its prefix.
       ...(refPrefix ? { refPrefix } : {}),
     };
   }
@@ -851,7 +851,7 @@ const scope = { crypto: globalThis.crypto };
   }
 
   // A reference key is free text a person may change at any time; an empty
-  // one is left out of the record (ADR-423).
+  // one is left out of the record.
   function refValue(value, path) {
     return value === undefined ? '' : stringValue(value, path, MAX_REF_LENGTH, false);
   }
@@ -860,7 +860,7 @@ const scope = { crypto: globalThis.crypto };
    * The prefix a project's reference keys start with, from its name: the
    * initials of two or three words, otherwise the first two letters. Letters
    * fold to A–Z and anything else is left out, so a name without Latin
-   * letters gives no prefix (ADR-423).
+   * letters gives no prefix.
    */
   function refPrefixFromName(name) {
     const fold = (text) =>
@@ -1000,8 +1000,8 @@ const scope = { crypto: globalThis.crypto };
 
   /**
    * Return a normalized copy of a project under a new identity, for example
-   * the conflict copy that keeps another device's version of a document
-   * (ADR-020). Every record's `projectId` follows the manifest; record IDs are
+   * the conflict copy that keeps another device's version of a document. Every
+   * record's `projectId` follows the manifest; record IDs are
    * kept, since they only need to be unique within one project.
    */
   function copyAsNewProject(value, options) {
@@ -1024,7 +1024,7 @@ const scope = { crypto: globalThis.crypto };
   /**
    * Whether a view shows an activity: every set filter matches and the
    * search finds its text in the activity's reference key, title,
-   * description or dimension values (ADR-423). The editor, screens and
+   * description or dimension values. The editor, screens and
    * screen-link snapshots share this test.
    */
   function activityMatcher({ filters = {}, query = '' } = {}, dimensions = [], locale) {
@@ -1116,7 +1116,7 @@ const scope = { crypto: globalThis.crypto };
   }
 
   /*
-   * The Notes envelope of a calendar metadata event (ADR-272). The manifest
+   * The Notes envelope of a calendar metadata event. The manifest
    * event holds the manifest without its dimensions; each dimension and each
    * shared view owns an event. Record order lives in each event's URL rank.
    */
@@ -1322,7 +1322,7 @@ const scope = { crypto: globalThis.crypto };
 })(scope);
 (function (globalThis) {
 /* Share links: a whole project and its initial view packed into a URL
-   fragment small enough to share anywhere (ADR-076). IDs become positions in
+   fragment small enough to share anywhere. IDs become positions in
    the link, and opening one yields a fresh copy with new IDs, unless the
    caller passes an earlier copy whose IDs to keep. */
 (function installTidigarShareLink(root, factory) {
@@ -1432,7 +1432,7 @@ const scope = { crypto: globalThis.crypto };
   }
 
   /* Synchronous decoding without web APIs, for a start that cannot wait and
-     for JavaScript engines without streams or atob (ADR-162). */
+     for JavaScript engines without streams or atob. */
   function base64UrlBytes(text) {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
     const values = new Map([...alphabet].map((character, index) => [character, index]));
@@ -1985,7 +1985,7 @@ const scope = { crypto: globalThis.crypto };
     }
 
     /**
-     * A smaller copy of a project and its initial view for a link (ADR-085):
+     * A smaller copy of a project and its initial view for a link:
      * `visibleItemIds` keeps only those activities and the dependencies
      * between them, `withoutDescriptions` empties the roadmap's and the
      * activities' descriptions, `withoutSavedViews` drops the saved views,
@@ -2064,7 +2064,7 @@ const scope = { crypto: globalThis.crypto };
     }
 
     /**
-     * What a screen link shows of one saved view (ADR-375, ADR-376), or null
+     * What a screen link shows of one saved view, or null
      * when the plan has no such view: the activities its filters and search
      * show, with no descriptions, no other saved views and only the
      * dimensions the view arranges, colors or lists by. Reference keys stay
@@ -2209,7 +2209,7 @@ const scope = { crypto: globalThis.crypto };
     return { encode, decode, decodeSync, pack, unpack, reduce, screenSnapshot };
   }
 
-  // Public addresses (ADR-077, ADR-078): the opener that makes a copy in the
+  // Public addresses: the opener that makes a copy in the
   // reader's Tidigar, and the embed edition a blog frames.
   const OPENER_URL = 'https://open.tidigar.com/s';
   const EMBED_URL = 'https://embed.tidigar.com/';
@@ -2226,7 +2226,7 @@ const scope = { crypto: globalThis.crypto };
      always light passes `theme`, which the embed keeps whatever the reader's
      setting; it goes in the frame's name, so the address stays the same.
      `href` is where the plain link goes: the opener by default, the screen
-     link itself for a screen link (ADR-441). `embedURL` selects the reader
+     link itself for a screen link. `embedURL` selects the reader
      and helper paired with that screen's deployment. */
   function embedCode(
     fragment,
@@ -2256,7 +2256,7 @@ const scope = { crypto: globalThis.crypto };
 });
 })(scope);
 (function (globalThis) {
-/* The plan format for AI agents (ADR-185): a roadmap written with real
+/* The plan format for AI agents: a roadmap written with real
    dates, names and titles instead of the share link's day offsets and
    positions. `toPayload` turns a plan into a share-link payload and fills in
    what is not semantic: the year, option colors and a timeline that fits the

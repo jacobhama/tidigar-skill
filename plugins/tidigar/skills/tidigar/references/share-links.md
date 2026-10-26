@@ -1,6 +1,6 @@
 # Tidigar share link specification
 
-See [sharing a roadmap as a link](https://tidigar.com/publish/share-link),
+See [sharing a roadmap as a link](https://tidigar.com/guides/sharing),
 with the Share link dialog and the steps to copy a link.
 
 Status: public pre-release specification, version 1. It defines how any tool,
