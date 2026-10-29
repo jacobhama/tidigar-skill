@@ -27,6 +27,8 @@
         "developerName": "Hamacher Software AB",
         "category": "Productivity",
         "websiteURL": "https://tidigar.com",
+        "privacyPolicyURL": "https://tidigar.com/privacy",
+        "termsOfServiceURL": "https://tidigar.com/terms",
         "defaultPrompt": [
           "Make a Tidigar Gantt chart of this project plan.",
           "Turn these milestones into a Tidigar roadmap grouped by team.",
