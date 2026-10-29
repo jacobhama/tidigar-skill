@@ -1,7 +1,7 @@
 {
   "name": "tidigar",
   "displayName": "Tidigar",
-  "description": "Create Tidigar roadmaps and Gantt charts as share links, or read and update plans in Tidigar Cloud or Tidigar Server.",
+  "description": "Create Tidigar roadmaps and Gantt charts as share links, or read and update plans in Tidigar Business or Tidigar Server.",
   "author": {
     "name": "Hamacher Software AB",
     "email": "hello@tidigar.com",

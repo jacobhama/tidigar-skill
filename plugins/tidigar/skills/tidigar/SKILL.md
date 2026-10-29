@@ -1,11 +1,11 @@
 ---
 name: tidigar
-description: Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar, read or change a Tidigar link, and save, read or change plans stored in Tidigar Cloud or Tidigar Server. Use when the user asks for a roadmap, timeline, Gantt chart or project plan in Tidigar, asks to save or change a plan in Tidigar, or gives a link to open.tidigar.com or app.tidigar.com.
+description: Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar, read or change a Tidigar link, and save, read or change plans stored in Tidigar Business or Tidigar Server. Use when the user asks for a roadmap, timeline, Gantt chart or project plan in Tidigar, asks to save or change a plan in Tidigar, or gives a link to open.tidigar.com or app.tidigar.com.
 ---
 
 # Tidigar
 
-> Tidigar is a visual roadmap and Gantt chart editor. Help the user make a plan, share a copy, or work on a plan stored in Tidigar Cloud or Tidigar Server.
+> Tidigar is a visual roadmap and Gantt chart editor. Help the user make a plan, share a copy, or work on a plan stored in Tidigar Business or Tidigar Server.
 
 This skill includes the reference module as `scripts/tidigar-link.mjs`, the Python builder as `scripts/tidigar_link.py`, the examples as `example_sharelink.md` and the share link specification as `references/share-links.md`, beside this file. Run the module from there, such as `node scripts/tidigar-link.mjs plan.json`, or the builder with `python3 scripts/tidigar_link.py plan.json`, instead of downloading or copying them.
 
@@ -13,7 +13,7 @@ Use this when a user asks for a roadmap, timeline, Gantt chart or project plan i
 
 ## Choose the right action
 
-- **Make a new plan without saving it to Cloud:** create a share link with the quick start below. The whole plan travels in the link; no Tidigar account or plan upload is needed. Anyone with the link can read it. Later edits to the original do not update the copy.
+- **Make a new plan without saving it to Business:** create a share link with the quick start below. The whole plan travels in the link; no Tidigar account or plan upload is needed. Anyone with the link can read it. Later edits to the original do not update the copy.
 - **Save, find, open or change a stored plan:** follow [Plans stored in Tidigar](#plans-stored-in-tidigar). Use this path for a `/p/<code>` plan link, and keep the existing plan's identity when updating it.
 - **Give the user a link to a stored plan:** return that plan's `url`. Create a separate share-link copy only when they ask for a copy. If their intent is unclear, ask whether they want the shared plan or a separate copy.
 
@@ -132,7 +132,7 @@ Always give the clickable link. Where you can render HTML, you may also show the
 
 ## Plans stored in Tidigar
 
-Tidigar Cloud and Tidigar Server keep plans for an organisation. Use this section when the user asks to save, list, open or change a stored plan, or gives a `/p/<code>` link. A link to that plan opens the shared plan; a share link opens a separate copy. The code is not the plan's id: list the organisation's plans and use the one whose `url` matches the link, ignoring anything after `?` or `#`.
+Tidigar Business and Tidigar Server keep plans for an organisation. Use this section when the user asks to save, list, open or change a stored plan, or gives a `/p/<code>` link. A link to that plan opens the shared plan; a share link opens a separate copy. The code is not the plan's id: list the organisation's plans and use the one whose `url` matches the link, ignoring anything after `?` or `#`.
 
 **A stored plan is not a share link.** Of everything above, only writing `plan.json` for a new plan applies:
 

@@ -179,7 +179,7 @@ except `id`, `projectId`, `hideTimelineLabels` and `showAssignee`, with these ch
 
 A link never carries assignments or assignee settings. The assignee axis of
 `row`, `col` or `group` is written as `""`, and a decoder ignores
-`showAssignee`; both matter only in a plan stored in Tidigar Cloud.
+`showAssignee`; both matter only in a plan stored in Tidigar Business.
 
 Every other field keeps its model value, for example `"view": "timeline"`,
 `"timelineScaleRows": 2` or `"timelineStart": "2026-01-01"`. A field left out

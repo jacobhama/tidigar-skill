@@ -2,9 +2,9 @@
 
 Plan with your AI assistant in [Tidigar](https://tidigar.com). Create a plan
 as a share link without a Tidigar account, or connect your assistant to read
-and update plans in Tidigar Cloud or Tidigar Server.
+and update plans in Tidigar Business or Tidigar Server.
 
-A share link carries a separate copy of the plan. A Cloud plan is saved for
+A share link carries a separate copy of the plan. A Business plan is saved for
 your organisation, and changes appear for everyone who opens it. See
 [Connect your AI assistant](https://tidigar.com/agents/cloud) for setup.
 
