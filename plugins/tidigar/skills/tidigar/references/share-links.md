@@ -150,7 +150,22 @@ Tidigar never drops an activity, a milestone or a period.
 Tidigar shares links of its own in a compressed form, `#s=1.…`. They are not
 meant to be read or written by hand; open them in Tidigar.
 
-## Building a link
+## Optional validation
+
+Agents can write links directly using [llms.txt](https://tidigar.com/llms.txt),
+without tools or code. To check a finished link locally, optionally run:
+
+```sh
+node tidigar-link.mjs --validate "<finished URL>"
+```
+
+The module below reports the plan's dates and dependencies, record counts,
+fragment length and any corrections Tidigar would make. It exits 0 only when
+the link opens without corrections. Invalid input, a fragment over 1,900
+characters or corrections to review produce exit 1. It does not rewrite the
+link or save anything; fix the original records and validate again if desired.
+
+## Building a link from JSON
 
 `https://tidigar.com/agents/v1/tidigar-link.mjs` (Node.js 20 or later, Deno or
 Bun) and `https://tidigar.com/agents/v1/tidigar_link.py` (Python 3.8 or

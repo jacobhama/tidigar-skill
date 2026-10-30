@@ -6,6 +6,7 @@
      node tidigar-link.mjs plan.json           build a link from a plan
      node tidigar-link.mjs - < plan.json       the same, from standard input
      node tidigar-link.mjs --embed plan.json   also print embed code
+     node tidigar-link.mjs --validate "<link>"  check a finished link without rewriting it
      node tidigar-link.mjs --read "<link>" > plan.json   read a link as a plan
 
    Or import it: createLink(plan), readLink(link), embedCode(link, title).
@@ -4653,6 +4654,22 @@ async function main(args) {
   const { readFile } = await import('node:fs/promises');
   const flags = new Set(args.filter((arg) => arg.startsWith('--')));
   const [input] = args.filter((arg) => !arg.startsWith('--'));
+  if (flags.has('--validate')) {
+    if (!input) throw new Error('Give the link to validate.');
+    const length = fragmentOf(input).length;
+    if (length > MAX_FRAGMENT_LENGTH)
+      throw new Error(`The link needs ${length} of ${MAX_FRAGMENT_LENGTH} characters.`);
+    const { plan, summary, corrections } = readLink(input);
+    console.log(summary);
+    console.log(
+      `\nRecords: ${plan.activities?.length || 0} activities, ${plan.milestones?.length || 0} milestones, ${plan.periods?.length || 0} periods.`,
+    );
+    console.log(`Fragment: ${length} of ${MAX_FRAGMENT_LENGTH} characters.`);
+    for (const line of corrections) console.error(`Correction needed: ${line}`);
+    if (corrections.length) process.exitCode = 1;
+    else console.log('Valid: opens without corrections.');
+    return;
+  }
   if (flags.has('--read')) {
     if (!input) throw new Error('Give the link to read.');
     const { plan, summary, corrections } = readLink(input);

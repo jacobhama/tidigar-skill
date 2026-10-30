@@ -1,8 +1,38 @@
 # Tidigar examples for AI agents
 
-Each example shows a user's request, the plan an agent writes for it, what `node tidigar-link.mjs plan.json` prints and the answer. The instructions are in [llms.txt](https://tidigar.com/llms.txt).
+Follow [llms.txt](https://tidigar.com/llms.txt) to write a link directly.
+No tool calls or scripts are needed.
 
-## Replace a heat pump
+## Create a plan directly
+
+The user asks for a heat pump replacement plan starting October 12, 2026,
+with fifteen activities, dependencies, a Team dimension and a Phase dimension.
+Choose dates, write the dimensions and activities as text records, then add
+the milestone, view, counts and final `~!`. The finished link is:
+
+https://open.tidigar.com/s#t=1~n=Replace_the_heat_pump~d=From_survey_to_a_warm_house_before_winter.~y=2026~m1=Team:Household,Installer,Electrician~m2=Phase:Prepare,Install,Finish~a1=Survey_the_current_system/10-12/3/Household,Prepare/100p~a2=Calculate_heat_demand/10-15/5/Installer,Prepare/@a1~a3=Request_three_quotes/10-15/14/Household,Prepare/@a1~a4=Choose_the_installer/10-29/5/Household,Prepare/@a2,a3~a5=Check_subsidies_and_permits/11-03/4/Household,Prepare/@a4~a6=Order_the_heat_pump/11-03/2/Installer,Prepare/@a4~a7=Delivery/11-05/14/Installer,Install/@a6~a8=Upgrade_the_electrical_panel/11-09/3/Electrician,Install/@a5~a9=Pour_the_outdoor_foundation/11-12/2/Installer,Install/@a5~a10=Remove_the_old_heat_pump/11-19/1/Installer,Install/@a7,a9~a11=Install_indoor_and_outdoor_units/11-20/5/Installer,Install/@a10~a12=Connect_power/11-25/1/Electrician,Install/@a8,a11~a13=Commission_and_balance/11-26/2/Installer,Finish/@a12~a14=Recycle_the_old_unit/11-30/2/Installer,Finish/@a10~a15=Follow-up_check/12-14/1/Household,Finish/@a13~s1=Heating_back_on/11-28/@a13~v=timeline/color:Team/group:Phase/start:10-12/end:12-14~c=15.1.0~!
+
+Return it as a clickable Markdown link, explaining the assumed installation
+and delivery times. Opening it in Tidigar checks the records. Optionally run
+`node tidigar-link.mjs --validate "<finished URL>"` beforehand.
+
+## Change a link directly
+
+The user says: "The installer can only start a week later."
+Read the link's activity records and dependencies directly. Move Remove the
+old heat pump (`a10`) and everything that waits on it, directly or indirectly,
+seven days later: `a11`, `a12`, `a13`, `a14`, `a15` and milestone `s1`.
+Keep their durations and references. Update the view's end from `12-14` to
+`12-21`; counts remain `c=15.1.0`. Return the edited URL as a new clickable
+link. The first link keeps opening the first plan.
+
+## Optional JSON builder example
+
+The same plan can optionally be written as JSON and built with a script.
+This is a reference for code-based workflows, not a prerequisite for making
+a link.
+
+### Replace a heat pump
 
 The request:
 
@@ -81,13 +111,3 @@ I assumed two weeks for delivery and that the old unit is removed the day
 before installation. The heating is back on 28 November; open the link to
 move anything, and the activities after it follow.
 ```
-
-## Change a link
-
-The user answers: "The installer can only start a week later." The agent reads the link as a plan, which the module writes to standard output and its summary to standard error, moves the affected dates and builds a new link:
-
-```sh
-node tidigar-link.mjs --read "https://open.tidigar.com/s#t=1~n=Replace_the_heat_pump~d=From_survey_to_a_warm_house_before_winter.~y=2026~m1=Team:Household,Installer,Electrician~m2=Phase:Prepare,Install,Finish~a1=Survey_the_current_system/10-12/3/Household,Prepare/100p~a2=Calculate_heat_demand/10-15/5/Installer,Prepare/@a1~a3=Request_three_quotes/10-15/14/Household,Prepare/@a1~a4=Choose_the_installer/10-29/5/Household,Prepare/@a2,a3~a5=Check_subsidies_and_permits/11-03/4/Household,Prepare/@a4~a6=Order_the_heat_pump/11-03/2/Installer,Prepare/@a4~a7=Delivery/11-05/14/Installer,Install/@a6~a8=Upgrade_the_electrical_panel/11-09/3/Electrician,Install/@a5~a9=Pour_the_outdoor_foundation/11-12/2/Installer,Install/@a5~a10=Remove_the_old_heat_pump/11-19/1/Installer,Install/@a7,a9~a11=Install_indoor_and_outdoor_units/11-20/5/Installer,Install/@a10~a12=Connect_power/11-25/1/Electrician,Install/@a8,a11~a13=Commission_and_balance/11-26/2/Installer,Finish/@a12~a14=Recycle_the_old_unit/11-30/2/Installer,Finish/@a10~a15=Follow-up_check/12-14/1/Household,Finish/@a13~s1=Heating_back_on/11-28/@a13~v=timeline/color:Team/group:Phase/start:10-12/end:12-14~c=15.1.0~!" > plan.json
-```
-
-It moves Remove the old heat pump and every activity and milestone after it by seven days in `plan.json`, runs `node tidigar-link.mjs plan.json` again and answers with the new link. The first link keeps opening the first plan.
