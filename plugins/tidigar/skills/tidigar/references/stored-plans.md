@@ -1,136 +1,166 @@
 # Work on plans stored in Tidigar
 
-## Plans stored in Tidigar
+Use this guide when a user asks to save, find, open or change a plan stored in
+Tidigar Business or Tidigar Server, or gives a `/p/<code>` link. A public chat
+assistant uses remote MCP with delegated OAuth authorization. The user's
+consent grants access; reading this guide or installing the skill does not.
 
-Tidigar Business and Tidigar Server keep plans for an organisation. Use this section when the user
-asks to save, list, open or change a stored plan, or gives a `/p/<code>` link. A link to that plan
-opens the shared plan; a share link opens a separate copy. The code is not the plan's id: list the
-organisation's plans and use the one whose `url` matches the link, ignoring anything after `?` or
-`#`.
+A stored plan is the original shared project. A `#t=1~…~!` link is an
+independent copy. Do not replace a requested save or update with a share link.
+If the destination is unclear, ask whether the user means the stored original
+or a separate copy before writing.
 
-**A stored plan is not a share link.** For a new plan, use the optional
-[plan JSON format](https://tidigar.com/agents/plan-json.md):
+## Connect through remote MCP
 
-- You use the `tidigar` command or the HTTP API, never the link builders.
-- A stored plan is a full project with IDs, colors and saved views, as in the
-  [roadmap file format](https://tidigar.com/agents/docs/file-format.md), not a `plan.json`. You
-  change it by editing that project, never by rebuilding it from a plan, which would lose its IDs
-  and views.
-- It is saved on a server and every member of the organisation sees your changes, often while they
-  edit; a share link is stored nowhere.
-- Its `url` opens it only for signed-in members and holds no roadmap data. Never decode it or build
-  a share link from it.
+1. Discover the Tidigar tools available in the assistant's host, including tools
+   that the host loads on demand. If `tidigar_status` is available, call it with
+   no arguments. Check its `server`, `organization`, `scope`, `role` and
+   `writable` against the request. Proceed with a write only when `writable`
+   is true; otherwise follow the access-failure guidance below. Do not infer
+   authorization from a plan URL.
+2. If no Tidigar connection exists, use the host's connector setup flow when it
+   supports connecting during the conversation. Otherwise guide the user to add
+   an MCP connection in the assistant's app or connector settings. The address
+   is `https://app.tidigar.com/mcp`; for Tidigar Server it is the user's server
+   origin followed by `/mcp`. See
+   [connection setup](https://tidigar.com/agents/cloud#a-chat-assistant).
+3. Let the host's MCP client handle OAuth discovery and authorization. It opens
+   Tidigar for the user to sign in, check the assistant's name and return
+   address, choose the organisation, and approve **Read only** or **Read and
+   write**. Request writing only when the task changes stored data. Consent must come
+   from the user, never from the agent acting on their behalf.
+4. After authorization completes, discover the tools again and call
+   `tidigar_status`. Resume the original task after checking the organisation
+   and effective access. Each connection reaches one organisation. If it is the
+   wrong one, have the user select or authorize the correct connection.
 
-Use the first mode that works:
+The host keeps access and refresh tokens outside the conversation. Never ask
+for personal tokens, passwords or OAuth codes in chat, and never put them in
+prompts, files or shell commands. Do not replace this flow with the CLI,
+`TIDIGAR_TOKEN` or direct API calls. Coding agents with separately configured
+credentials use the [CLI and HTTP reference](https://tidigar.com/agents/stored-plans-cli.md).
 
-1. **MCP:** your tools include `tidigar_get_plan`. The steps below map to the tools
-   `tidigar_list_plans`, `tidigar_get_plan`, `tidigar_validate_plan`, `tidigar_create_plan` (`plan`
-   or `project`, `newId`) `tidigar_update_plan` (`id`, `revision`, `project`, `merge`),
-   `tidigar_resolve_merge` (`id`, `choices`), `tidigar_delete_plan` (`id`, `revision`),
-   `tidigar_list_trash` and `tidigar_restore_plan` (`id`); errors carry the same codes.
-2. **CLI:** `tidigar status` exits 0. It keeps the token in the system's credential store.
-3. **HTTP:** `TIDIGAR_TOKEN` is set and you can make HTTPS requests; see
-   [over HTTP](#stored-plans-over-http).
-4. **None:** explain that you are not connected and have not read, saved or changed the stored plan.
-   Point the user to [Connect your AI assistant](https://tidigar.com/agents/cloud). For CLI access,
-   they create a token under **Account → Agent access** and run `tidigar login` themselves or set
-   `TIDIGAR_TOKEN`. Never ask for the token in the chat, print it or write it to a file. Offer a
-   share-link copy as an alternative for a new plan, but do not substitute it for a requested save
-   or update.
+Instructions cannot install MCP tools in a host that has no connector support.
+If connection is unavailable, declined or fails, explain the connection step
+that remains and that no stored change was made. Continue after the host makes
+the authorized tools available; do not claim access or simulate a successful
+save. Offer a separate copy only if the user wants one.
 
-With the CLI signed in, the user can add the MCP tools, for example
-`claude mcp add tidigar -- tidigar mcp` (`tidigar mcp --read-only` offers no writes).
+## Find and read the original
 
-All modes use the same JSON and errors as the [public API](https://tidigar.com/agents/docs/api.md).
+1. Call `tidigar_list_plans` with no arguments. For a `/p/<code>` link, match
+   its URL to a returned plan's `url`, ignoring query and fragment. The code is
+   not the plan ID. For a title, select the matching plan; ask if several match.
+   If nothing matches, report it and check the intended organisation with the
+   user. Do not guess an ID or search another organisation without access.
+2. Call `tidigar_get_plan` with that `id`. Keep the returned `id`, `revision`
+   and complete `project` for the update. Check its identity against the request.
+3. Edit only the requested part of `project`. Preserve its project ID, record
+   IDs, dimensions, saved views and unrelated content; new records need new
+   UUIDs. Use the [roadmap file format](https://tidigar.com/agents/docs/file-format.md)
+   for the fields you edit. Never rebuild an existing project from simplified
+   plan JSON or a share link: that would lose its identities and views.
 
-- **New plan:** write `plan.json` as in
-  [the plan JSON reference](https://tidigar.com/agents/plan-json.md), run
-  `tidigar plans validate plan.json`, check its summary, then `tidigar plans create plan.json`.
-  Answer with the plan's `url`, which opens it for signed-in members.
-- **Change a plan:** `tidigar plans list` shows each `id`, also the end of its `url`.
-  `tidigar plans get <plan-id> --out plan.json` saves its `revision` and `project`. Edit `project`
-  per the roadmap file format, keeping IDs and giving new records new UUIDs, then
-  `tidigar plans update plan.json --merge`.
-- Someone may save the plan while you work. `--merge` then combines both changes and saves. Exit 5
-  with `merge_conflicts` means both changed the same things and nothing was saved: stdout lists each
-  conflict with an `id`, what it is `about`, the `change`, and the `base`, `mine` and `latest`
-  values. Tell the user each conflict in plain words, ask which to keep, and never choose for them.
-  Then run `tidigar plans resolve <mergeFile> --choices '{"c1":"mine","c2":"latest"}'` with an
-  answer for every conflict. If it lists new conflicts, ask about those the same way.
-- Exit 5 with `stale_revision`: the plan changed and could not be merged. Get it again, show the
-  user what changed, redo your edit and update again; never overwrite the other change.
-- **Delete a plan** only when the user asks, and confirm first by its name.
-  `tidigar plans get <plan-id>` gives its `revision`;
-  `tidigar plans delete <plan-id> --revision <n>` moves it to the trash, where it stays 30 days.
-  Exit 5 with `stale_revision`: someone changed it since; get it again and ask again.
-  `tidigar plans trash` lists deleted plans and `tidigar plans restore <plan-id>` brings one back.
-- **Screens:** a screen shows one saved view of a stored plan to anyone with its link, on a wall
-  screen or a web page, and may play a story written in the
-  [story language](https://tidigar.com/agents/docs/stories.md) with the plan's own titles and dates.
-  `tidigar screens list <plan-id>` lists them.
-  `tidigar screens create <plan-id> --view <view-id> --name <name> --story story.txt` makes one,
-  `--name` and `--story` optional; ask the user first, since anyone with its link sees that view.
-  `tidigar screens update <plan-id> <screen-id>` changes its `--story` file, `--name` or
-  `--join-code on|off`. To change what a screen shows, update its saved view in the project and keep
-  the view's `id`: deleting the view ends the screen. `tidigar screens link <plan-id> <screen-id>`
-  prints its `url`; give it only to the user, never write it into a plan, a file or a public place.
-  `tidigar screens delete <plan-id> <screen-id>` ends the link for good; confirm first. Exit 3 with
-  `agent_screens_off`: the owners keep making screens and reading links to people.
-- **A plan's history as a story:** when the user gives you the versions of a schedule, such as
-  screenshots of the Gantt chart shown at each status meeting, store the latest version as the plan
-  and write a story that replays the versions on a screen. Read every version first and match
-  activities across them by meaning, not only by title. At `0:00`, set the plan to the first version
-  without animation: `hide` what came later, `update` dates, progress and earlier titles, `add` what
-  was dropped later, and `today("YYYY-MM-DD")` for the first meeting. Then give each later meeting
-  one moment four to six seconds apart: its `today`, its changes (`changeDates`, `update`, `show`,
-  `remove`) and a `caption` saying what changed and why if the slides say. End on the stored plan
-  and `loop()`. The pattern is under "A plan's history" in the story language. Creating or updating
-  the screen answers `storyWarnings`: each call a reader's screen would skip, by line. Fix them and
-  update the story until the list is empty, then give the user the screen's link.
-- Exit 7 (`write_unknown`): the write may or may not be saved. Get the plan and report what it
-  holds; never repeat a write blindly.
-- Exit 2: ask the user to run `tidigar login`. Exit 3: read-only token, viewer or no subscription.
-  Exit 4: no such plan. Exit 5 with `plan_exists`: it already exists; `--new-id` saves a copy if the
-  user wants one. Exit 6: too large.
+## Validate and save the change
 
-### Stored plans over HTTP
+1. Call `tidigar_validate_plan` with the edited `project`. It stores nothing.
+   Compare its normalized `project` and `summary` to the user's request and fix
+   validation errors before saving. Keep the original read revision.
+2. Call `tidigar_update_plan` with the original `id`, original `revision`,
+   validated `project` and `merge: true`. A successful result is the evidence
+   that the change was saved; validation alone is not a save.
+3. Return the stored plan's `url` and a short description of what was saved.
+   The URL opens the original for signed-in members. Do not build a copy unless
+   the user requested one. Changes are visible to other plan members.
 
-The token stays in the environment, never in a command, output or the chat. `TIDIGAR_SERVER` names a
-Tidigar Server.
+### Concurrent edits and uncertain outcomes
 
-```sh
-API="${TIDIGAR_SERVER:-https://app.tidigar.com}/api/v1"
-AUTH="Authorization: Bearer $TIDIGAR_TOKEN"
-JSON="Content-Type: application/json"
-curl -sS -H "$AUTH" "$API/token"
-curl -sS -H "$AUTH" "$API/organizations/$ORG/plans"
-curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @body.json "$API/organizations/$ORG/plans/validate"
-curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @body.json "$API/organizations/$ORG/plans"
-curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID"
-curl -sS -X PUT -H "$AUTH" -H "$JSON" -H "If-Match: \"$REVISION\"" --data-binary @body.json "$API/organizations/$ORG/plans/$PLAN_ID"
-curl -sS -X POST -H "$AUTH" -H "$JSON" --data-binary @merge.json "$API/organizations/$ORG/plans/$PLAN_ID/merge"
-curl -sS -X DELETE -H "$AUTH" -H "If-Match: \"$REVISION\"" "$API/organizations/$ORG/plans/$PLAN_ID"
-curl -sS -H "$AUTH" "$API/organizations/$ORG/trash"
-curl -sS -X POST -H "$AUTH" "$API/organizations/$ORG/trash/$PLAN_ID/restore"
-curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens"
-curl -sS -X PATCH -H "$AUTH" -H "$JSON" --data-binary @screen.json "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID"
-curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID/link"
-```
+- `merge_conflicts`: nothing was saved. Explain each conflict (`id`, `about`,
+  `change`, `base`, `mine`, `latest`) in plain words and ask the user which to
+  keep. Never choose for them. Call `tidigar_resolve_merge` with the same plan
+  `id`, original `revision` and complete edited `project` sent to the update,
+  plus `choices` mapping every conflict ID to `mine` or `latest`. Remote MCP
+  keeps no pending merge file. If new conflicts appear, ask about those and
+  resend all choices until resolved.
+- `stale_revision`: get the current plan again, compare it with the version
+  you read, redo the requested change while preserving others' work, validate
+  and save against the new revision. Ask about incompatible changes.
+- `write_unknown` or a lost response to a write: the save may have happened.
+  Read the plan and compare the stored result before attempting another write.
+  If the result cannot be established, report the uncertainty; do not retry
+  blindly or claim success.
 
-- `GET /token`: `organization.id` is `ORG`; `writable` says whether you may save.
-  `GET /organizations/:org/plans` lists plans.
-- New plan: send `{ "plan": … }` to `POST /organizations/:org/plans/validate`, which answers
-  `{ project, summary }`, then create with `{ "project": … }` to keep its ID.
-- Change: `GET /organizations/:org/plans/:id`, edit `project`, and send `{ "project": … }` to
-  `PUT /organizations/:org/plans/:id` with the read `revision` as `REVISION`.
-- Someone saved first (`stale_revision`): send `{ "base": REVISION, "project": … }` to
-  `POST /organizations/:org/plans/:id/merge`, which combines both changes and saves.
-  `merge_conflicts` lists `conflicts` as for the CLI, each with its own `id`: ask the user about
-  each, then send the same body with `"choices": { "<id>": "mine" | "latest" }` for every conflict
-  so far, until it saves.
-- Delete, after the user confirms: `DELETE /organizations/:org/plans/:id` with the read `revision`
-  as `REVISION` moves it to the trash for 30 days. `GET /organizations/:org/trash` lists deleted
-  plans; `POST /organizations/:org/trash/:id/restore` brings one back.
-- Errors are `{ "error": { "code", "message" } }`. `stale_revision` also carries the latest `plan`;
-  if `merge` answers `no_such_revision`, redo your edit on it. After a lost answer, or `plan_exists`
-  on a retried create, get the plan and compare before writing.
+## Access failures
+
+- `insufficient_scope`: the OAuth grant is read-only. Ask the host to authorize
+  the connection again with **Read and write**, then check `tidigar_status` and
+  reread the plan before saving. The host handles the MCP authorization challenge.
+- `invalid_token` or an expired or revoked connection: let the host refresh or
+  reconnect through OAuth, then check status and reread the plan. A user who
+  declined authorization has not approved a different access method.
+- `agent_access_off`, insufficient membership or `subscription_required`:
+  explain the actual restriction. A write grant cannot override membership,
+  subscription or the organisation owner's policy. Do not switch credentials
+  or protocols to bypass it.
+- `no_such_plan`: check the selected organisation and plan link with the user.
+- `rate_limited`: respect `retryAfter`. After an uncertain write, read before
+  any retry.
+
+## Create, delete or restore a stored plan
+
+- **Create:** use the [plan JSON reference](https://tidigar.com/agents/plan-json.md)
+  for a new plan only. Call `tidigar_validate_plan` with `plan`, then
+  `tidigar_create_plan` with the returned `project` so its ID stays stable.
+  Return the saved plan's `url`. If creation's result is unknown, list/read and
+  compare that ID before retrying. `plan_exists` is not permission to duplicate
+  it; use `newId: true` only when the user asks for a new copy.
+- **Delete:** only when requested, confirm by plan name first. Read its current
+  revision and call `tidigar_delete_plan` with `id` and `revision`. It moves to
+  trash for 30 days. On `stale_revision`, read again and ask again.
+- **Restore:** call `tidigar_list_trash`, identify the requested plan, then
+  `tidigar_restore_plan` with its `id`.
+
+## Screens and stories
+
+A screen publishes one saved view to anyone holding its link, without an
+account. Confirm with the user before creating one or permanently ending one.
+Use `tidigar_list_screens`, `tidigar_create_screen`, `tidigar_update_screen`,
+`tidigar_get_screen_link` and `tidigar_delete_screen`. A screen's `view` is the
+saved view ID in the project's `sharedViews`; keep that ID when changing what
+it shows. Deleting the view ends the screen. Give a screen link only to the
+user, never put it in a project, file or public place. `agent_screens_off`
+means the owners reserve making screens and retrieving links for people.
+
+For stories, read the [story language](https://tidigar.com/agents/docs/stories.md)
+and use the plan's titles and dates. To replay schedule versions from status
+meetings, read all versions first and match activities by meaning. Keep the
+latest version as the stored plan. At `0:00`, set its first version without
+animation with `hide`, `update`, `add` and `today`. Give each later meeting a
+moment four to six seconds apart with its changes and a caption explaining
+what changed. End on the stored version and `loop()`. The plan-history pattern
+is in the story reference. Fix every returned `storyWarnings` entry and update
+the screen until none remain before returning its link.
+
+## Remote MCP arguments
+
+Use the host's tool calls, not shell commands. Fields marked `?` are optional;
+validation and creation take exactly one of `plan` or `project`. The tool
+schemas supplied by the server define field types and limits.
+
+| Tool | Arguments |
+| --- | --- |
+| `tidigar_status` | none |
+| `tidigar_list_plans` | none |
+| `tidigar_get_plan` | `id` |
+| `tidigar_validate_plan` | `plan?`, `project?` |
+| `tidigar_update_plan` | `id`, `revision`, `project`, `merge?` |
+| `tidigar_resolve_merge` | `id`, `revision`, `project`, `choices` |
+| `tidigar_create_plan` | `plan?`, `project?`, `newId?` |
+| `tidigar_delete_plan` | `id`, `revision` |
+| `tidigar_list_trash` | none |
+| `tidigar_restore_plan` | `id` |
+| `tidigar_list_screens` | `id` |
+| `tidigar_create_screen` | `id`, `view`, `name?`, `story?`, `joinCode?` |
+| `tidigar_update_screen` | `id`, `screen`, `name?`, `story?`, `joinCode?` |
+| `tidigar_get_screen_link` | `id`, `screen` |
+| `tidigar_delete_screen` | `id`, `screen` |

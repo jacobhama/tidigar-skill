@@ -8,7 +8,7 @@ description: Make Tidigar roadmaps, Gantt charts and project timelines as share 
 > Tidigar is a visual roadmap and Gantt chart editor. Create an editable plan
 > as a link, or work on a plan stored in Tidigar Business or Tidigar Server.
 
-Create links directly with the guide below; no scripts are required. For optional validation, use `node scripts/tidigar-link.mjs --validate "<finished URL>"`. The bundled files are `scripts/tidigar-link.mjs`, `scripts/tidigar_link.py`, `example_sharelink.md`, `references/share-links.md`, `references/plan-json.md` and `references/stored-plans.md`. Use these local references instead of downloading them.
+Create links directly with the guide below; no scripts are required. For optional validation, use `node scripts/tidigar-link.mjs --validate "<finished URL>"`. The bundled files are `scripts/tidigar-link.mjs`, `scripts/tidigar_link.py`, `example_sharelink.md`, `references/share-links.md`, `references/plan-json.md`, `references/stored-plans.md` and `references/stored-plans-cli.md`. Use these local references instead of downloading them.
 
 ## Choose the right action
 
@@ -17,8 +17,10 @@ Create links directly with the guide below; no scripts are required. For optiona
   with the link can read it; later edits do not update other copies.
 - **Save, find, open or change a stored plan:** follow
   [Plans stored in Tidigar](https://tidigar.com/agents/stored-plans.md).
-  A `/p/<code>` link opens a stored plan. Return its existing `url` when the
-  user wants that plan; create a separate copy only when asked for one.
+  This includes a `/p/<code>` link or a request to edit the original in
+  Tidigar. Public chat assistants use remote MCP with delegated OAuth consent
+  at `https://app.tidigar.com/mcp`; the linked guide covers connecting when
+  tools are missing. Return the stored plan's `url`, not a separate copy.
 
 ## Create a share link
 
@@ -139,7 +141,7 @@ link when opened and reports any corrections or problems.
 - [Plan JSON and builders](https://tidigar.com/agents/plan-json.md): optional
   JSON input, JavaScript and Python builders and module usage.
 - [Plans stored in Tidigar](https://tidigar.com/agents/stored-plans.md):
-  authenticated MCP, CLI and HTTP operations, including safe updates.
+  remote MCP, delegated OAuth connection and safe updates for chat assistants.
 - [Examples](https://tidigar.com/agents/example_sharelink.md): a larger plan,
   its optional JSON representation and a link change.
 - [llms-full.txt](https://tidigar.com/llms-full.txt): this guide and its
