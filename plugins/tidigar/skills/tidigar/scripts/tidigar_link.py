@@ -1,19 +1,25 @@
-"""Tidigar share links from plans, version 1: https://tidigar.com/llms.txt
+"""Readable Tidigar links (#t=1~...) from plans: https://tidigar.com/llms.txt
 python3 tidigar_link.py plan.json      build a link; - reads standard input
 python3 tidigar_link.py --read LINK    print a link's roadmap as a plan"""
-import base64, datetime, json, re, sys, zlib
+import datetime, json, re, sys, urllib.parse
 
 OPENER = "https://open.tidigar.com/s"
 COLORS = ["4f7cff", "16a34a", "f59e0b", "8a52c1", "0891b2", "dc5f5f", "64748b", "db2777"]
 PERIOD_COLOR = "9aa7b5"
 VIEW = {"type": "view", "groupBy": "group", "colorBy": "color", "rows": "row",
-        "columns": "col", "start": "timelineStart", "end": "timelineEnd"}
+        "columns": "col", "start": "timelineStart", "end": "timelineEnd",
+        "layout": "timelineActivityRows", "style": "presentationStyle"}
+# classic: one activity per row under a fixed label, as in MS Project; compact: shared rows.
+LAYOUTS = {"classic": "single-label", "compact": "compact"}
+STYLES = ["standard", "minimal", "airy", "contrast", "terminal"]
 KEYS = {"plan": ["$schema", "version", "name", "description", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
         "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn", "startAfter"],
         "milestone": ["title", "date", "dependsOn", "fixed"],
         "period": ["title", "start", "end", "color", "vacation"],
         "option": ["name", "color"], "view": list(VIEW)}
+AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group"}
+MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow"}
 
 
 def fail(path, message):
@@ -98,6 +104,7 @@ def to_payload(plan):
             dims[key] = []
         return dims[key]
 
+    # Colors matter in a stored plan; a link carries none.
     def add(options, option, shade, path):
         text(option, path, 100)
         if any(known == option for known, _ in options):
@@ -287,6 +294,14 @@ def to_payload(plan):
             o["view"] = value
         elif key in ("start", "end"):
             o[field] = iso(day(value, f"view.{key}"))
+        elif key == "layout":
+            if value not in LAYOUTS:
+                fail("view.layout", "must be classic or compact")
+            o[field] = LAYOUTS[value]
+        elif key == "style":
+            if value not in STYLES:
+                fail("view.style", "must be " + ", ".join(STYLES))
+            o[field] = value
         elif value is None or value == "":
             o[field] = ""
         elif value not in dims:
@@ -311,20 +326,248 @@ def to_payload(plan):
     return payload
 
 
+ESCAPED = set('%~/_&#"<>`(){}[]|\\^')
+
+
+def field(value, also=""):
+    """Text in a field: a space is _, and what would split a field is escaped."""
+    return "".join("_" if c == " " else urllib.parse.quote(c, safe="") if c in ESCAPED or c in also or c.isspace()
+                   else c for c in str(value)).replace("~", "%7E")
+
+
+def name(value):
+    return field(value, ",:@=")
+
+
+def size(text):
+    """Characters as JavaScript and browsers count them: UTF-16 code units."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def link(payload):
-    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
-    fragment = "s=1." + base64.urlsafe_b64encode(deflate.compress(data) + deflate.flush()).decode().rstrip("=")
-    if len(fragment) > 1900:
-        raise ValueError(f"The roadmap is too large for a share link. It needs {len(fragment)} of 1900 characters; "
-                         "shorten or drop descriptions and merge small activities.")
+    """The readable link of a checked payload: t=1~...~!"""
+    year = payload["y"]
+    base = datetime.date(year, 1, 1).toordinal()
+    dims, rows, marks, bands = payload.get("m", []), payload.get("i", []), payload.get("s", []), payload.get("p", [])
+
+    def date(offset):
+        value = iso(base + offset)
+        return value[5:] if value.startswith(f"{year}-") else value
+
+    vacations = [(p[1], p[1] + p[2]) for p in bands if (p[4] if len(p) > 4 else 1) == 1]
+
+    def working(offset):
+        return datetime.date.fromordinal(base + offset).weekday() < 5 and not any(a <= offset <= b for a, b in vacations)
+
+    def days(start, length):
+        if payload.get("w") != 1:
+            return length + 1
+        return max(1, sum(1 for d in range(start, start + length + 1) if working(d)))
+
+    def key(index):
+        return f"a{index + 1}" if index < len(rows) else f"s{index - len(rows) + 1}"
+
+    out = ["t=1", f"n={field(payload['n'])}"]
+    if payload.get("d"):
+        out.append(f"d={field(payload['d'])}")
+    out.append(f"y={year}")
+    if payload.get("w") == 1:
+        out.append("w")
+    for k, (dim, options) in enumerate(dims):
+        out.append(f"m{k + 1}={name(dim)}:" + ",".join(name(o) for o, _ in options))
+    for k, row in enumerate(rows):
+        title, start, length, description, progress, values, after, shares = (row + ["", 0, 0, "", 0, [], [], []][len(row):])[:8]
+        parts = [field(title), date(start), str(days(start, length))]
+        chosen = []
+        for d, v in enumerate(values):
+            if v:
+                option = dims[d][1][v - 1][0]
+                shared = any(option == o for e, (_, opts) in enumerate(dims) if e != d for o, _ in opts)
+                chosen.append(f"{name(dims[d][0])}:{name(option)}" if shared or re.fullmatch(r"\d+p", option)
+                              else name(option))
+        if chosen:
+            parts.append(",".join(chosen))
+        if after:
+            parts.append("@" + ",".join(key(x) + (f":{shares[i]}" if i < len(shares) and shares[i] != 100 else "")
+                                        for i, x in enumerate(after)))
+        if progress:
+            parts.append(f"{progress}p")
+        if description:
+            parts.append(f"d={field(description)}")
+        out.append(f"a{k + 1}=" + "/".join(parts))
+    for k, m in enumerate(marks):
+        parts = [field(m[0]), date(m[1])]
+        if m[3:4] == [1]:
+            parts.append("fixed")
+        elif len(m) > 2 and m[2]:
+            parts.append("@" + ",".join(key(x) for x in m[2]))
+        out.append(f"s{k + 1}=" + "/".join(parts))
+    for k, p in enumerate(bands):
+        out.append(f"p{k + 1}={field(p[0])}/{date(p[1])}/{p[2] + 1}" + ("/work" if p[4:5] == [0] else ""))
+    o = payload.get("o")
+    if o:
+        parts = [MODES[o.get("view", "grid")]]
+        parts += [word for word, rows in LAYOUTS.items() if o.get("timelineActivityRows") == rows]
+        parts += [o["presentationStyle"]] if o.get("presentationStyle", "standard") != "standard" else []
+        parts += [f"{axis}:{name(dims[o[f]][0])}" for axis, f in AXES.items() if isinstance(o.get(f), int)]
+        for edge, f in (("start", "timelineStart"), ("end", "timelineEnd")):
+            if o.get(f):
+                parts.append(f"{edge}:{date(datetime.date.fromisoformat(o[f]).toordinal() - base)}")
+        out.append("v=" + "/".join(parts))
+    out += [f"c={len(rows)}.{len(marks)}.{len(bands)}", "!"]
+    fragment = "~".join(out)
+    if size(fragment) > 1900:
+        raise ValueError(f"The roadmap is too large for a link. It needs {size(fragment)} of 1900 characters; "
+                         "shorten titles, drop descriptions and merge small activities.")
     return f"{OPENER}#{fragment}"
 
 
+def payload_of(url):
+    """A readable link's payload. Raises an error naming every record that cannot be read."""
+    fragment = url.split("#", 1)[-1].split("&", 1)[0]
+    records = fragment.split("~")
+    if records[0] != "t=1":
+        raise ValueError("Give a readable Tidigar link, #t=1~...")
+    problems = []
+    fields, lists = {}, {"a": {}, "s": {}, "p": {}, "m": {}}
+    for record in records[1:]:
+        if record in ("", "!"):
+            continue
+        match = re.fullmatch(r"([a-z])(\d*)(?:=(.*))?", record, re.S)
+        if not match:
+            problems.append(f"{q(record[:30])}: not a record")
+        elif match[1] in lists and match[2]:
+            lists[match[1]][int(match[2])] = match[3] or ""
+        else:
+            fields[match[1] + match[2]] = match[3] or ""
+
+    def text(value):
+        return urllib.parse.unquote(value.replace("_", " "))
+
+    year = int(fields.get("y", "0") or 0)
+    if not 1900 <= year <= 2200:
+        raise ValueError("y: the link needs a year from 1900 to 2200")
+    base = datetime.date(year, 1, 1).toordinal()
+
+    def day(value, where):
+        try:
+            whole = value if re.fullmatch(r"\d{4}-\d\d-\d\d", value) else f"{year}-{value}"
+            return datetime.date.fromisoformat(whole).toordinal() - base
+        except ValueError:
+            problems.append(f"{where}: {q(value)} is not a date as MM-DD or YYYY-MM-DD")
+            return 0
+
+    def count(value, where):
+        if not re.fullmatch(r"\d+d?", value) or int(value.rstrip("d")) < 1:
+            problems.append(f"{where}: days {q(value)} is not a whole number of days, 1 or more")
+            return 1
+        return int(value.rstrip("d"))
+
+    ordered = {letter: sorted(entries.items()) for letter, entries in lists.items()}
+    dims = []
+    for number, value in ordered["m"]:
+        dim, _, options = value.partition(":")
+        dims.append([text(dim), [[text(o), COLORS[i % len(COLORS)]] for i, o in enumerate(options.split(",")) if o]])
+    keys = {f"a{n}": i for i, (n, _) in enumerate(ordered["a"])}
+    keys.update({f"s{n}": len(ordered["a"]) + i for i, (n, _) in enumerate(ordered["s"])})
+    bands = []
+    for number, value in ordered["p"]:
+        title, start, length, *rest = value.split("/") + ["", ""]
+        first = day(start, f"p{number}")
+        bands.append([text(title), first, count(length, f"p{number}") - 1, PERIOD_COLOR, 0 if "work" in rest else 1])
+    vacations = [(p[1], p[1] + p[2]) for p in bands if p[4] == 1]
+
+    def end(first, n):
+        if fields.get("w") is None:
+            return n - 1
+        d, seen = first - 1, 0
+        while seen < n:
+            d += 1
+            if datetime.date.fromordinal(base + d).weekday() < 5 and not any(a <= d <= b for a, b in vacations):
+                seen += 1
+        return d - first
+
+    def option_numbers(value, where):
+        numbers = [0] * len(dims)
+        for raw in filter(None, value.split(",")):
+            dim, _, option = raw.rpartition(":")
+            hits = [(k, [o for o, _ in opts].index(text(option)) + 1) for k, (d, opts) in enumerate(dims)
+                    if (not dim or d == text(dim)) and text(option) in [o for o, _ in opts]]
+            if hits:
+                numbers[hits[0][0]] = hits[0][1]
+            else:
+                problems.append(f"{where}: no dimension has the option {q(text(raw))}")
+        while numbers and not numbers[-1]:
+            numbers.pop()
+        return numbers
+
+    def after(value, where):
+        refs, shares = [], []
+        for part in filter(None, value.split(",")):
+            ref, _, share = part.partition(":")
+            if ref not in keys:
+                problems.append(f"{where}: the dependency {ref} names no record")
+                continue
+            refs.append(keys[ref])
+            shares.append(int(share) if share else 100)
+        while shares and shares[-1] == 100:
+            shares.pop()
+        return refs, shares
+
+    rows = []
+    for number, value in ordered["a"]:
+        where = f"a{number}"
+        title, start, length, *rest = value.split("/") + ["", ""]
+        first = day(start, where)
+        row = [text(title), first, end(first, count(length, where)), "", 0, [], [], []]
+        for part in rest:
+            if part.startswith("d="):
+                row[3] = text(part[2:])
+            elif part.startswith("@"):
+                row[6], row[7] = after(part[1:], where)
+            elif re.fullmatch(r"\d+p", part):
+                row[4] = int(part[:-1])
+            elif part:
+                row[5] = option_numbers(part, where)
+        rows.append(row)
+    marks = []
+    for number, value in ordered["s"]:
+        title, date, *rest = value.split("/") + [""]
+        refs = next((after(x[1:], f"s{number}")[0] for x in rest if x.startswith("@")), [])
+        marks.append([text(title), day(date, f"s{number}"), refs, 1 if "fixed" in rest else 0])
+    if problems:
+        raise ValueError("; ".join(problems))
+    payload = {"n": text(fields.get("n", "Roadmap")), "y": year}
+    if fields.get("d"):
+        payload["d"] = text(fields["d"])
+    if "w" in fields:
+        payload["w"] = 1
+    for key, value in (("m", dims), ("i", rows), ("s", marks), ("p", bands)):
+        if value:
+            payload[key] = value
+    if "v" in fields:
+        mode, *settings = fields["v"].split("/")
+        if mode in LAYOUTS or mode in STYLES:
+            mode, settings = "timeline", [mode] + settings
+        o = {"view": {v: k for k, v in MODES.items()}.get(mode, "timeline")}
+        names = [d for d, _ in dims]
+        for setting in settings:
+            axis, _, value = setting.partition(":")
+            if setting in LAYOUTS:
+                o["timelineActivityRows"] = LAYOUTS[setting]
+            elif setting in STYLES:
+                o["presentationStyle"] = setting
+            elif axis in AXES and text(value) in names:
+                o[AXES[axis]] = names.index(text(value))
+            elif axis in ("start", "end"):
+                o["timeline" + axis.title()] = iso(base + day(value, "v"))
+        payload["o"] = o
+    return payload
+
+
 def read(url):
-    """A link's roadmap as a plan, to change and build again. Saved views are left out."""
-    data = url.split("#", 1)[-1].split("&", 1)[0].split("s=1.", 1)[1]
-    payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)), -15))
+    """A readable link's roadmap as a plan, to change and build again."""
+    payload = payload_of(url)
     base = datetime.date(payload["y"], 1, 1).toordinal()
     dims, rows, marks = payload.get("m", []), payload.get("i", []), payload.get("s", [])
     titles = [row[0] if row else "" for row in rows]
@@ -371,7 +614,13 @@ def read(url):
     for key, field in VIEW.items():
         if field in o:
             value = o[field]
-            view[key] = value if key in ("type", "start", "end") else (dims[value][0] if value != "" else None)
+            if key == "layout":
+                view.update({"layout": w for w, rows in LAYOUTS.items() if rows == value})
+            elif key == "style":
+                if value != "standard":
+                    view["style"] = value
+            else:
+                view[key] = value if key in ("type", "start", "end") else (dims[value][0] if value != "" else None)
     if view:
         view.setdefault("type", "grid")
         plan["view"] = view
@@ -413,4 +662,4 @@ if __name__ == "__main__" and "ipykernel" not in sys.modules:
             url = link(payload)
         except ValueError as error:
             sys.exit(str(error))
-        print(url + "\n\n" + summary(payload) + f"\n\nFragment: {len(url) - len(OPENER) - 1} of 1900 characters.")
+        print(url + "\n\n" + summary(payload) + f"\n\nFragment: {size(url) - len(OPENER) - 1} of 1900 characters.")

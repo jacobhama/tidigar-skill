@@ -17,7 +17,7 @@ Use this when a user asks for a roadmap, timeline, Gantt chart or project plan i
 - **Save, find, open or change a stored plan:** follow [Plans stored in Tidigar](#plans-stored-in-tidigar). Use this path for a `/p/<code>` plan link, and keep the existing plan's identity when updating it.
 - **Give the user a link to a stored plan:** return that plan's `url`. Create a separate share-link copy only when they ask for a copy. If their intent is unclear, ask whether they want the shared plan or a separate copy.
 
-For a share link, prefer the JavaScript or Python builder. If neither can run, follow the published [share link specification](https://tidigar.com/agents/docs/share-links.md).
+For a share link, prefer the JavaScript or Python builder. If neither can run, write the link by hand as the [share link specification](https://tidigar.com/agents/docs/share-links.md) describes.
 
 ## Quick start: create a plan and return its link
 
@@ -32,20 +32,21 @@ This guide and either builder are enough for a normal project plan, including ac
 5. Compare the printed summary with the request: check dates, activities, dimensions, dependencies and milestones.
 6. Answer with the exact generated URL as a clickable Markdown link, followed by your date assumptions. The link opens the plan as an editable timeline in Tidigar.
 
-If you cannot download or execute the JavaScript or Python builder, you may generate the link yourself from the published share link specification. Read it in full and follow its payload, compression, encoding and length rules. State any verification you could not perform; do not claim a link was tested unless you actually tested it. If you cannot produce a link that follows the specification, explain the limitation and give the plan as a fallback.
+If you cannot download or execute either builder, write the link by hand, one record at a time, as the [share link specification](https://tidigar.com/agents/docs/share-links.md) describes: `https://open.tidigar.com/s#t=1~n=…~y=…~m1=…~a1=…~c=…~!`. Count your records in `c=` and end with `~!`. State any verification you could not perform; do not claim a link was tested unless you actually tested it.
+
+Always give a builder's link exactly as it printed it. Never retype, shorten or reflow a link: one lost character damages it.
 
 ## Rules
 
 - Use only the plan fields described below. Owners, status and categories are dimensions, set through `values`.
-- Prefer a builder for the link, its `s=1.…` text, the compact payload, day offsets and option numbers. When you cannot download or execute either builder, you may write these yourself according to the published specification.
-- Read the [share link specification](https://tidigar.com/agents/docs/share-links.md) when generating a link yourself or when the request needs features the plan cannot express, such as saved views or filters. If that reference is unavailable, use a builder for the supported part when possible, or give the plan as a fallback, and explain what you left out.
+- Prefer a builder. When neither can run, write the link by hand from the [share link specification](https://tidigar.com/agents/docs/share-links.md). If that reference is unavailable, give the plan as a fallback and say so.
 
 ## The model
 
 A roadmap is a handful of records. Everything Tidigar shows is a view of them.
 
 - **Activity**: a bar on the timeline. A title, a start date and an inclusive end date, with an optional description, progress (`0`, `25`, `50`, `75` or `100`) and one option per dimension.
-- **Dimension**: a way to sort activities, such as Team, Phase or Status, with options in order, each with a color. Owners, status and categories are all dimensions; there are no other fields for them. Dimensions decide grouping, board rows and columns, colors and filters.
+- **Dimension**: a way to sort activities, such as Team, Phase or Status, with options in order; Tidigar colors them. Owners, status and categories are all dimensions; there are no other fields for them. Dimensions decide grouping, board rows and columns, colors and filters.
 - **Dependency**: an activity normally starts at least one day after each activity it waits for ends (100%). Its optional `startAfter` chooses a threshold per dependency: `0`, `25`, `50`, `75` or `100` percent of the predecessor’s planned duration. At 0% they may start together; at 50% the successor may start after half the predecessor’s days have passed, rounded up. This is planned time, not the predecessor’s reported `progress`. Count work days when `workDays` is true, otherwise calendar days. With several dependencies, all thresholds must be met. Dependencies cannot form cycles. Milestones that wait for activities always wait for their end. An activity can also wait for a fixed milestone and start on its date; that dependency has no partial threshold. When an activity or a fixed milestone moves in Tidigar, what waits for it follows.
 - **Milestone**: a titled single date, which can wait for activities. A fixed milestone (`"fixed": true`) is instead an event on a set date, such as a decision or a delivery: it waits for nothing, and activities name it by title in their `dependsOn`.
 - **Period**: a titled band across the timeline, such as a holiday or a sprint. It is a vacation unless it says otherwise.
@@ -53,6 +54,8 @@ A roadmap is a handful of records. Everything Tidigar shows is a view of them.
 - **View**: how the roadmap is shown. `timeline` is the Gantt chart, `grid` a board, `list` a table and `flow` the dependency chart, each arranged by dimensions. A link opens in one view.
 
 You write records with real dates and names. Tidigar adds IDs, colors and view settings.
+
+Tidigar's own shared links are compressed (`#s=1.…`). Never read, change or build one by hand; ask the user to open it in Tidigar.
 
 ## Share URL integrity
 
@@ -81,22 +84,22 @@ The output of the serializer is authoritative, and the whole roadmap lives in th
 - Unknown fields are errors; owners, status and categories belong in `values`.
 - `name` is required, 1–100 characters. Everything else is optional: `description`, `workDays` (`true` plans in work days), `dimensions`, `activities`, `milestones`, `periods` and `view`.
 - Dates are `YYYY-MM-DD`. `end` is inclusive; left out, the activity lasts one day.
-- `dimensions` maps a name to its options in order. An option is a name, or `{ "name": "Design", "color": "#4f7cff" }`. An activity's `values` names one option per dimension; an option no dimension lists is added.
+- `dimensions` maps a name to its options in order. An option is a name, or `{ "name": "Design", "color": "#4f7cff" }` for a stored plan; a link carries no colors. An activity's `values` names one option per dimension; an option no dimension lists is added.
 - `dependsOn` names activities by title, or by 0-based index where titles repeat. Activities may also name fixed milestones by title.
 - An activity’s `startAfter` is an array in the same order as `dependsOn`, for example `"dependsOn": ["Design", "Approval"], "startAfter": [50, 100]`. Values are `0`, `25`, `50`, `75` or `100`; missing entries mean `100`, and trailing `100` entries may be omitted. It cannot have more entries than `dependsOn`; fixed milestones require `100`. In the example, Design lasts 19 calendar days, so Build starts on March 26, after `ceil(19 × 50 / 100) = 10` days.
 - Builders preserve supplied dates. For a partial threshold, validation requires only that the successor does not start before the predecessor; it does not recalculate the work calendar. Choose dates that meet the intended threshold. Tidigar’s editor uses the exact threshold when scheduling.
 - Titles are at most 180 characters; milestones and periods need one.
-- `periods`: `{ "title", "start", "end", "color", "vacation" }`.
-- `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and `columns` take a dimension's name; `start` and `end` set the timeline's range. Left out, the link opens a timeline over the plan's dates, grouped and colored by the first dimension, and its board has the first dimension as rows and the second as columns.
-- A link holds roughly 20–30 activities. If too large, shorten descriptions or merge small activities and explain omissions. Never truncate a link.
+- `periods`: `{ "title", "start", "end", "vacation" }`, and `color` in a stored plan.
+- `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and `columns` take a dimension's name; `start` and `end` set the timeline's range. `layout` is `"classic"`, one activity per row under a label column as in MS Project, or `"compact"`, activities sharing rows; `style` is `"minimal"`, `"airy"`, `"contrast"` or `"terminal"`. Left out, the link opens a timeline over the plan's dates, grouped and colored by the first dimension, and its board has the first dimension as rows and the second as columns.
+- A link holds roughly 20–30 activities. If too large, shorten titles, drop descriptions or merge small activities and explain omissions. Never truncate a link.
 
 The example opens as a timeline grouped and colored by team, and its board has a column per phase:
 
-https://open.tidigar.com/s#s=1.XZBNa8MwDIb_ytBZBdv5KjmO7bZD2Qo7BB-8VG0NjtPFScco_e-Tnaz7AB-En1d6X-kCHmp4pbdgR7pzZvLtERA-oVZClQgd1E0DWzIdIBcPFOzBsyDfV-1-Dxrj35lcf-rIjwxkabLcgNYRbY4mUGrcOPOv7X6ybvenQSPYZPdM75MdKE4MgKVAKREApRDYSJR6dp2TVDnKdaTFArER-tf8dR4Jc8YKFZMoKWbNlgJnllm1ONw0KqUJKc3TchRZSGyyBHqoL3C29MG3G21HznpeE9re9QPUbHcY-umUqm_8MpphZHk860pkK6HgBz763Q3xk3C9fgE
+https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Development~m2=Phase:Plan,Build~a1=Requirements/03-02/12/Design,Plan/100p~a2=Design/03-16/19/Design,Plan/@a1/50p~a3=Build/03-26/51/Development,Build/@a2:50~a4=Test/05-18/12/Development,Build/@a3~s1=Launch/06-01/@a4~v=timeline/color:Team/group:Team/start:03-02/end:06-01~c=4.1.0~!
 
 ## The reference module
 
-`https://tidigar.com/agents/v1/tidigar-link.mjs` is the code Tidigar itself uses to validate and encode links, as one file for Node.js 20 or later, Deno or Bun. It runs entirely on your machine.
+`https://tidigar.com/agents/v1/tidigar-link.mjs` validates a plan with the code Tidigar itself uses and writes its link, as one file for Node.js 20 or later, Deno or Bun. It runs entirely on your machine.
 
 ```sh
 curl -fSL -o tidigar-link.mjs https://tidigar.com/agents/v1/tidigar-link.mjs
@@ -109,25 +112,23 @@ It prints the link, a summary with real dates and the fragment's length. `-` rea
 Invalid activities[2] "Build".start: must be at least one day after dependency activities[1] "Design" ends
 ```
 
-As a module: `import { createLink, readLink, embedCode } from './tidigar-link.mjs'`; `createLink(plan)` returns `{ url, fragment, length, summary, payload }`.
+As a module: `import { createLink, readLink, embedCode } from './tidigar-link.mjs'`; `createLink(plan)` returns `{ url, fragment, length, limit, summary }`.
 
 ## Change a link
 
 Read the link as a plan, edit the plan and build a new link. The old link keeps opening the old roadmap.
 
 ```sh
-node tidigar-link.mjs --read "https://open.tidigar.com/s#s=1.…" > plan.json
-python3 tidigar_link.py --read "https://open.tidigar.com/s#s=1.…" > plan.json
+node tidigar-link.mjs --read "https://open.tidigar.com/s#t=1~…" > plan.json
+python3 tidigar_link.py --read "https://open.tidigar.com/s#t=1~…" > plan.json
 ```
-
-A plan leaves out a link's saved views and finer view settings, and the module says so when a link has them.
 
 ## Show it in the chat
 
 Always give the clickable link. Where you can render HTML, you may also show the roadmap; `node tidigar-link.mjs --embed plan.json` prints this frame:
 
 ```html
-<iframe src="https://embed.tidigar.com/#s=1.…" title="Website launch" width="100%" height="480" style="border:0"></iframe>
+<iframe src="https://embed.tidigar.com/#t=1~…" title="Website launch" width="100%" height="480" style="border:0"></iframe>
 ```
 
 ## Plans stored in Tidigar
@@ -201,8 +202,8 @@ curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID/l
 
 You do not need any of these to make or change a link: the module and the Python builder already follow every rule.
 
-- [Share link specification](https://tidigar.com/agents/docs/share-links.md): every field and limit of the payload. Read it in full before you write a payload yourself or need what a plan cannot express, such as saved views or filters.
-- [Plan schema](https://tidigar.com/agents/schema/plan-v1.json) and [payload schema](https://tidigar.com/agents/schema/share-link-v1.json): JSON Schema 2020-12, for validation in your own code.
+- [Share link specification](https://tidigar.com/agents/docs/share-links.md): every record and rule of a link. Read it in full before you write a link by hand.
+- [Plan schema](https://tidigar.com/agents/schema/plan-v1.json): JSON Schema 2020-12, for validation in your own code.
 - [Example roadmaps](https://tidigar.com/examples/): ready-made plans to start from.
 
 Other formats, only when the user asks for them and never to make a link:
