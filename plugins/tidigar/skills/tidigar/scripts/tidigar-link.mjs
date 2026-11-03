@@ -45,7 +45,7 @@ const scope = { crypto: globalThis.crypto };
   const api = factory(root);
   if (typeof module === 'object' && module && module.exports) module.exports = api;
   if (root) root.tidigarModel = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function createtidigarModel(root) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function createModel(root, timed) {
   'use strict';
 
   const DAY = 86400000;
@@ -181,6 +181,120 @@ const scope = { crypto: globalThis.crypto };
   function dateValue(value, path) {
     if (!Number.isFinite(parseDate(value))) invalid(path, 'expected a valid date');
     return value;
+  }
+
+  // The timed profile is opt-in while persistence readers and guards roll out.
+  function zoneValue(value, path = 'timeZone') {
+    if (typeof value !== 'string' || !value || /^[+-]/.test(value))
+      invalid(path, 'expected a named time zone');
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: value }).format(0);
+    } catch {
+      invalid(path, 'unknown time zone');
+    }
+    return value;
+  }
+
+  function instantValue(value, path = 'instant') {
+    if (
+      typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) ||
+      new Date(value).toISOString().replace('.000Z', 'Z') !== value
+    )
+      invalid(path, 'expected a UTC instant with minute precision');
+    return value;
+  }
+
+  function projectInstant(value, timeZone) {
+    instantValue(value);
+    zoneValue(timeZone);
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(new Date(value))
+        .map(({ type, value }) => [type, value]),
+    );
+    const date = `${parts.year}-${parts.month}-${parts.day}`;
+    dateValue(date, 'instant.date');
+    return { date, time: `${parts.hour}:${parts.minute}`, second: parts.second };
+  }
+
+  // Return every matching instant. Zero is a skipped hour; two requires a
+  // caller's explicit offset choice. No normalization or device-zone fallback.
+  function resolveLocal(date, time, timeZone) {
+    dateValue(date, 'local.date');
+    if (typeof time !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+      invalid('local.time', 'expected HH:mm');
+    zoneValue(timeZone);
+    const wall = Date.parse(`${date}T${time}:00Z`);
+    const offsets = new Set();
+    for (let hours = -48; hours <= 48; hours += 6) {
+      const probe = wall + hours * 3600000;
+      let local;
+      try {
+        local = projectInstant(new Date(probe).toISOString().replace('.000Z', 'Z'), timeZone);
+      } catch {
+        continue;
+      }
+      offsets.add(Date.parse(`${local.date}T${local.time}:${local.second}Z`) - probe);
+    }
+    if (offsets.size && [...offsets].every((offset) => offset % 60000 !== 0))
+      invalid('local.time', 'historical zone offset cannot represent minute-precision clock input');
+    const candidates = [];
+    for (const offset of offsets) {
+      const instant = new Date(wall - offset).toISOString().replace('.000Z', 'Z');
+      // Historical sub-minute offsets have no minute-precision representation.
+      if (!instant.endsWith(':00Z')) continue;
+      let local;
+      try {
+        local = projectInstant(instant, timeZone);
+      } catch {
+        continue;
+      }
+      if (local.date === date && local.time === time)
+        candidates.push({ instant, offsetMinutes: offset / 60000 });
+    }
+    return candidates.sort((a, b) => a.instant.localeCompare(b.instant));
+  }
+
+  function temporalFields(source, context, path, point = false) {
+    const fields = {};
+    for (const key of ['timing', 'fixedStart', 'timelineWindow']) {
+      if (source[key] !== undefined && (!timed || context.formatVersion !== 2))
+        invalid(`${path}.${key}`, 'requires the timed model profile');
+    }
+    if (source.timing !== undefined) {
+      const timing = requireRecord(source.timing, `${path}.timing`);
+      const names = point ? ['at', 'timeZone'] : ['start', 'end', 'timeZone'];
+      if (Object.keys(timing).sort().join() !== names.sort().join())
+        invalid(`${path}.timing`, 'unexpected timing fields');
+      zoneValue(timing.timeZone, `${path}.timing.timeZone`);
+      for (const key of point ? ['at'] : ['start', 'end']) {
+        instantValue(timing[key], `${path}.timing.${key}`);
+        const local = projectInstant(timing[key], timing.timeZone);
+        projectInstant(timing[key], context.timeZone);
+        if (local.date !== source[point ? 'date' : key])
+          invalid(`${path}.timing`, 'zone-rule mismatch: authored date requires explicit repair');
+      }
+      if (!point && timing.end <= timing.start)
+        invalid(`${path}.timing`, 'end must be after start');
+      fields.timing = { ...timing };
+    }
+    if (source.fixedStart !== undefined) {
+      if (point || source.fixedStart !== true)
+        invalid(`${path}.fixedStart`, 'must be true on an activity');
+      fields.fixedStart = true;
+    }
+    return fields;
   }
 
   function dateTimestamp(value) {
@@ -336,7 +450,7 @@ const scope = { crypto: globalThis.crypto };
     if (!isRecord(value)) invalid('context', 'expected a project, manifest, or project ID');
 
     const source = isRecord(value.manifest) ? value.manifest : value;
-    const context = {};
+    const context = { formatVersion: source.formatVersion, timeZone: source.timeZone };
     if (hasOwn(source, 'projectId')) context.projectId = uuidValue(source.projectId, 'projectId');
     if (Array.isArray(source.dimensions)) {
       context.dimensions = source.dimensions;
@@ -390,7 +504,10 @@ const scope = { crypto: globalThis.crypto };
 
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
-    if (source.formatVersion !== 1) invalid('manifest.formatVersion', 'must be 1');
+    if (source.formatVersion !== 1 && !(timed && source.formatVersion === 2))
+      invalid('manifest.formatVersion', 'unsupported model version');
+    if (source.formatVersion === 1 && source.timeZone !== undefined)
+      invalid('manifest.timeZone', 'requires the timed model profile');
     const projectId = uuidValue(source.projectId, 'manifest.projectId');
     if (registry.has(projectId)) invalid('manifest.projectId', 'duplicate ID');
     registry.add(projectId, 'manifest.projectId');
@@ -419,7 +536,10 @@ const scope = { crypto: globalThis.crypto };
       );
     return {
       projectId,
-      formatVersion: 1,
+      formatVersion: source.formatVersion,
+      ...(source.formatVersion === 2
+        ? { timeZone: zoneValue(source.timeZone, 'manifest.timeZone') }
+        : {}),
       name,
       description,
       dimensions,
@@ -544,6 +664,8 @@ const scope = { crypto: globalThis.crypto };
     for (const item of items) {
       for (const dependency of item.dependsOn) {
         const point = fixed.get(dependency);
+        const predecessor = point || byId.get(dependency);
+        if (item.timing || predecessor.timing) continue;
         if (point) {
           if (item.startAfter?.[dependency] !== undefined)
             invalid(`${path}.${item.id}.startAfter`, `must not name fixed milestone ${dependency}`);
@@ -593,7 +715,19 @@ const scope = { crypto: globalThis.crypto };
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
       const ref = refValue(source.ref, `${path}.ref`);
-      const record = { id, projectId, title, description, progress, start, end, values, dependsOn };
+      if (source.timelineWindow !== undefined) invalid(path, 'activity cannot carry a view window');
+      const record = {
+        id,
+        projectId,
+        title,
+        description,
+        progress,
+        start,
+        end,
+        values,
+        dependsOn,
+        ...temporalFields(source, context, path),
+      };
       // Only an activity that overlaps another carries the field.
       if (Object.keys(startAfter).length) record.startAfter = startAfter;
       if (ref) record.ref = ref;
@@ -676,6 +810,22 @@ const scope = { crypto: globalThis.crypto };
       const id = registry.add(source.id, `${path}.id`);
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const name = stringValue(source.name, `${path}.name`, 100, true);
+      temporalFields(source, context, path);
+      if (source.timing !== undefined || source.fixedStart !== undefined)
+        invalid(path, 'view cannot carry record timing');
+      let timelineWindow;
+      if (source.timelineWindow !== undefined) {
+        const window = requireRecord(source.timelineWindow, `${path}.timelineWindow`);
+        if (Object.keys(window).sort().join() !== 'end,start')
+          invalid(`${path}.timelineWindow`, 'expected start and end');
+        for (const key of ['start', 'end']) {
+          instantValue(window[key], `${path}.timelineWindow.${key}`);
+          projectInstant(window[key], context.timeZone);
+        }
+        if (window.end <= window.start)
+          invalid(`${path}.timelineWindow`, 'end must be after start');
+        timelineWindow = { start: window.start, end: window.end };
+      }
       const mode = source.view === undefined ? 'grid' : source.view;
       if (!VIEWS.has(mode)) invalid(`${path}.view`, 'must be grid, timeline, list, or flow');
       const row = normalizeAxisReference(source.row, dimensions, `${path}.row`);
@@ -751,6 +901,7 @@ const scope = { crypto: globalThis.crypto };
         projectId,
         name,
         view: mode,
+        ...(timelineWindow ? { timelineWindow } : {}),
         row,
         col,
         color,
@@ -956,6 +1107,8 @@ const scope = { crypto: globalThis.crypto };
           invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
       }
       const ref = refValue(source.ref, `${path}.ref`);
+      if (source.timelineWindow !== undefined)
+        invalid(path, 'milestone cannot carry a view window');
       const origin = milestoneSourceValue(source.source, `${path}.source`, projectId);
       // An incoming milestone is another plan's date: it waits for nothing here.
       if (origin && !fixed) invalid(`${path}.source`, 'needs a fixed milestone');
@@ -968,6 +1121,7 @@ const scope = { crypto: globalThis.crypto };
         fixed,
         ...(ref ? { ref } : {}),
         ...(origin ? { source: origin } : {}),
+        ...temporalFields(source, context, path, true),
       };
     });
   }
@@ -978,6 +1132,8 @@ const scope = { crypto: globalThis.crypto };
     return indicators.map((indicator, index) => {
       const path = `periodIndicators[${index}]`;
       const source = requireRecord(indicator, path);
+      if (['timing', 'fixedStart', 'timelineWindow'].some((key) => source[key] !== undefined))
+        invalid(path, 'period indicators remain date-only');
       const id = registry.add(source.id, `${path}.id`);
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const title = stringValue(source.title, `${path}.title`, 180, true);
@@ -997,10 +1153,65 @@ const scope = { crypto: globalThis.crypto };
       for (const dependency of milestone.dependsOn) {
         const parent = byId.get(dependency);
         if (!parent) invalid(`milestones[${index}].dependsOn`, `unknown activity ${dependency}`);
+        if (milestone.timing || parent.timing) continue;
         if (dateTimestamp(milestone.date) < dayAfter(parent.end))
           invalid(
             `milestones[${index}].date`,
             `must be at least one day after dependency ${dependency} ends`,
+          );
+      }
+    }
+  }
+
+  function validateTemporalDependencies(project) {
+    const { manifest, items, milestones, periodIndicators } = project;
+    const calendar = manifest.schedule === 'work-days' ? workCalendar(periodIndicators) : null;
+    const permitted = (date) => !calendar || calendar.isWorkDay(dateTimestamp(date));
+    const nextDate = (date) => {
+      const result = new Date(dateTimestamp(date) + DAY).toISOString().slice(0, 10);
+      return dateValue(result, 'dependency.date');
+    };
+    function dayBoundary(date, requirePermitted = true) {
+      // Midnight may be skipped. Boundaries use the first valid minute of an
+      // existing permitted civil date; explicit clock input still rejects gaps.
+      for (let day = date; ; day = nextDate(day)) {
+        if (requirePermitted && !permitted(day)) continue;
+        for (let minute = 0; minute < 1440; minute++) {
+          const time = `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+          const matches = resolveLocal(day, time, manifest.timeZone);
+          if (matches.length) return matches[0].instant;
+        }
+      }
+    }
+    const byId = new Map([...items, ...milestones].map((record) => [record.id, record]));
+    for (const record of [...items, ...milestones]) {
+      const point = !Object.hasOwn(record, 'start');
+      for (const id of record.dependsOn) {
+        const parent = byId.get(id);
+        if (!record.timing && !parent.timing) continue;
+        if (record.startAfter?.[id] !== undefined)
+          invalid(
+            `items.${record.id}.startAfter`,
+            'timed dependencies cannot use percentage overlap',
+          );
+        const parentPoint = !Object.hasOwn(parent, 'start');
+        if (record.timing && !parent.timing && parentPoint)
+          invalid(`items.${record.id}.dependsOn`, 'specify the milestone time or use whole dates');
+        if (point && record.timing && !parent.timing)
+          invalid(
+            `milestones.${record.id}.dependsOn`,
+            'timed following milestones require timed parents',
+          );
+        const release = parent.timing
+          ? parent.timing[parentPoint ? 'at' : 'end']
+          : dayBoundary(nextDate(parent.end));
+        const start = record.timing
+          ? record.timing[point ? 'at' : 'start']
+          : dayBoundary(point ? record.date : record.start, false);
+        if (start < release)
+          invalid(
+            `${point ? 'milestones' : 'items'}.${record.id}`,
+            `starts before dependency ${id} releases`,
           );
       }
     }
@@ -1018,7 +1229,9 @@ const scope = { crypto: globalThis.crypto };
     const periodIndicators = normalizePeriodIndicators(source.periodIndicators, manifest, registry);
     validateItemDependencies(items, 'items', milestones);
     validateMilestoneDates(milestones, items);
-    return { manifest, items, sharedViews, milestones, periodIndicators };
+    const project = { manifest, items, sharedViews, milestones, periodIndicators };
+    if (manifest.formatVersion === 2) validateTemporalDependencies(project);
+    return project;
   }
 
   /**
@@ -1145,6 +1358,8 @@ const scope = { crypto: globalThis.crypto };
    */
   function serializeCalendarMetadata(project, section, recordId) {
     const normalized = normalizeProject(project);
+    if (normalized.manifest.formatVersion !== 1)
+      invalid('calendarMetadata', 'timed calendar profile is not enabled');
     let payload;
     if (section === 'manifest') {
       const { dimensions: _dimensions, ...manifest } = JSON.parse(
@@ -1186,10 +1401,14 @@ const scope = { crypto: globalThis.crypto };
     if (!CALENDAR_METADATA_SECTIONS.has(section))
       invalid('section', 'must be manifest, view or dimension');
     if (source.section !== section) invalid('calendarMetadata.section', 'unexpected section');
+    if (contextFrom(contextInput).formatVersion === 2)
+      invalid('calendarMetadata', 'timed calendar profile is not enabled');
     const payload = requireRecord(source.payload, 'calendarMetadata.payload');
     exactKeys(payload, [section], 'calendarMetadata.payload');
     if (section === 'manifest') {
       const manifest = requireRecord(payload.manifest, 'calendarMetadata.payload.manifest');
+      if (manifest.formatVersion !== 1)
+        invalid('calendarMetadata', 'timed calendar profile is not enabled');
       if (hasOwn(manifest, 'dimensions'))
         invalid('calendarMetadata.payload.manifest.dimensions', 'belong to dimension events');
       return { manifest: deserializeManifest({ ...manifest, dimensions: [] }) };
@@ -1305,6 +1524,10 @@ const scope = { crypto: globalThis.crypto };
   }
 
   return {
+    // Not installed in any editor, storage, server or host entry point yet.
+    createTimedProfile: () => createModel(root, true),
+    projectInstant,
+    resolveLocal,
     uuid,
     maxViews: MAX_VIEWS,
     assigneeAxis: ASSIGNEE_AXIS,
