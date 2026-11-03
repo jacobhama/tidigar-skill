@@ -66,8 +66,15 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
   roadmap planned in work days these are work days, skipping weekends and
   vacation periods.
 - Then, in any order:
-  - **Options** by name, comma-separated, one per dimension. Where two
-    dimensions have an option of the same name, write `Team:Design`.
+  - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
+    order. When a name belongs to several dimensions, its position selects
+    the dimension: with `m1=Team:Network,Servers` and
+    `m2=Phase:Inventory,Network`, `Network,Network` sets both Team and Phase
+    to Network. Empty positions are allowed: `,Network` sets only Phase.
+    Unique names also work in any order. To select a dimension explicitly,
+    write `Team:Network` or `Phase:Network`; the prefix takes priority over
+    position. If a shared name does not match its position, Tidigar reports
+    the ambiguity and uses the first matching dimension.
   - **Dependencies** after `@`, comma-separated: activities and fixed
     milestones by key, such as `@a1,s2`. The activity starts after each of
     them ends; `@a1:50` lets it start once 50% of `a1`'s planned days have

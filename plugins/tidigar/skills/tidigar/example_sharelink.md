@@ -5,25 +5,27 @@ No tool calls or scripts are needed.
 
 ## Create a plan directly
 
-The user asks for a heat pump replacement plan starting October 12, 2026,
-with fifteen activities, dependencies, a Team dimension and a Phase dimension.
+The user asks for a roadmap for launching their new app, with design,
+engineering and marketing work in phases. No date is given, so the agent
+starts on a coming Monday, here 11 January 2027, and chooses fifteen
+activities with dependencies, a Team dimension and a Phase dimension.
 Choose dates, write the dimensions and activities as text records, then add
 the milestone, view, counts and final `~!`. The finished link is:
 
-https://open.tidigar.com/s#t=1~n=Replace_the_heat_pump~d=From_survey_to_a_warm_house_before_winter.~y=2026~m1=Team:Household,Installer,Electrician~m2=Phase:Prepare,Install,Finish~a1=Survey_the_current_system/10-12/3/Household,Prepare/100p~a2=Calculate_heat_demand/10-15/5/Installer,Prepare/@a1~a3=Request_three_quotes/10-15/14/Household,Prepare/@a1~a4=Choose_the_installer/10-29/5/Household,Prepare/@a2,a3~a5=Check_subsidies_and_permits/11-03/4/Household,Prepare/@a4~a6=Order_the_heat_pump/11-03/2/Installer,Prepare/@a4~a7=Delivery/11-05/14/Installer,Install/@a6~a8=Upgrade_the_electrical_panel/11-09/3/Electrician,Install/@a5~a9=Pour_the_outdoor_foundation/11-12/2/Installer,Install/@a5~a10=Remove_the_old_heat_pump/11-19/1/Installer,Install/@a7,a9~a11=Install_indoor_and_outdoor_units/11-20/5/Installer,Install/@a10~a12=Connect_power/11-25/1/Electrician,Install/@a8,a11~a13=Commission_and_balance/11-26/2/Installer,Finish/@a12~a14=Recycle_the_old_unit/11-30/2/Installer,Finish/@a10~a15=Follow-up_check/12-14/1/Household,Finish/@a13~s1=Heating_back_on/11-28/@a13~v=timeline/color:Team/group:Phase/start:10-12/end:12-14~c=15.1.0~!
+https://open.tidigar.com/s#t=1~n=Launch_the_new_app~d=From_goals_to_launch_day_and_the_first_weeks_after.~y=2027~m1=Team:Design,Engineering,Marketing~m2=Phase:Plan,Build,Launch~a1=Set_the_launch_goals/01-11/3/Marketing,Plan/100p~a2=Interview_users/01-14/9/Design,Plan/@a1~a3=Plan_the_architecture/01-14/7/Engineering,Plan/@a1~a4=Plan_the_campaign/01-14/14/Marketing,Plan/@a1~a5=Design_the_app/01-25/12/Design,Build/@a2~a6=Build_the_backend/01-21/23/Engineering,Build/@a3~a7=Build_the_app/02-15/19/Engineering,Build/@a5,a6~a8=Create_app_store_assets/02-08/12/Design,Build/@a5~a9=Build_the_launch_page/02-22/10/Marketing,Build/@a4,a8~a10=Beta_test/03-08/12/Engineering,Launch/@a7~a11=Fix_beta_feedback/03-22/5/Engineering,Launch/@a10~a12=App_store_review/03-29/5/Engineering,Launch/@a11~a13=Brief_press_and_partners/03-29/5/Marketing,Launch/@a9,a11~a14=Run_the_launch_campaign/04-06/11/Marketing,Launch/@a12,a13~a15=Review_user_feedback/04-26/5/Design,Launch/@a14~s1=Launch_day/04-05/@a12,a13~v=timeline/color:Team/group:Phase/start:01-11/end:04-30~c=15.1.0~!
 
-Return it as a clickable Markdown link, explaining the assumed installation
-and delivery times. Opening it in Tidigar checks the records. Optionally run
+Return it as a clickable Markdown link, explaining the assumed start date and
+durations. Opening it in Tidigar checks the records. Optionally run
 `node tidigar-link.mjs --validate "<finished URL>"` beforehand.
 
 ## Change a link directly
 
-The user says: "The installer can only start a week later."
-Read the link's activity records and dependencies directly. Move Remove the
-old heat pump (`a10`) and everything that waits on it, directly or indirectly,
-seven days later: `a11`, `a12`, `a13`, `a14`, `a15` and milestone `s1`.
-Keep their durations and references. Update the view's end from `12-14` to
-`12-21`; counts remain `c=15.1.0`. Return the edited URL as a new clickable
+The user says: "The beta test can only start a week later."
+Read the link's activity records and dependencies directly. Move Beta test
+(`a10`) and everything that waits on it, directly or indirectly, seven days
+later: `a11`, `a12`, `a13`, `a14`, `a15` and milestone `s1`.
+Keep their durations and references. Update the view's end from `04-30` to
+`05-07`; counts remain `c=15.1.0`. Return the edited URL as a new clickable
 link. The first link keeps opening the first plan.
 
 ## Optional JSON builder example
@@ -32,46 +34,45 @@ The same plan can optionally be written as JSON and built with a script.
 This is a reference for code-based workflows, not a prerequisite for making
 a link.
 
-### Replace a heat pump
+### Launch an app
 
 The request:
 
 ```text
-Create a Tidigar roadmap for replacing our heat pump this autumn, starting
-12 October 2026: 15 tasks with dependencies, a Team dimension (household,
-installer, electrician) and a Phase dimension.
+Make a Tidigar roadmap for launching our new app: design, engineering and
+marketing work in phases, with dependencies and a launch day.
 ```
 
-The agent assumes durations a typical installation takes, names the dimensions Team and Phase, refers to dependencies by title and opens the link as a timeline grouped by phase and colored by team. It writes `plan.json`:
+The agent starts on a coming Monday, assumes durations a typical launch takes, names the dimensions Team and Phase, refers to dependencies by title and opens the link as a timeline grouped by phase and colored by team. It writes `plan.json`:
 
 ```json
 {
   "$schema": "https://tidigar.com/agents/schema/plan-v1.json",
   "version": 1,
-  "name": "Replace the heat pump",
-  "description": "From survey to a warm house before winter.",
+  "name": "Launch the new app",
+  "description": "From goals to launch day and the first weeks after.",
   "dimensions": {
-    "Team": ["Household", "Installer", "Electrician"],
-    "Phase": ["Prepare", "Install", "Finish"]
+    "Team": ["Design", "Engineering", "Marketing"],
+    "Phase": ["Plan", "Build", "Launch"]
   },
   "activities": [
-    { "title": "Survey the current system", "start": "2026-10-12", "end": "2026-10-14", "progress": 100, "values": { "Team": "Household", "Phase": "Prepare" } },
-    { "title": "Calculate heat demand", "start": "2026-10-15", "end": "2026-10-19", "values": { "Team": "Installer", "Phase": "Prepare" }, "dependsOn": ["Survey the current system"] },
-    { "title": "Request three quotes", "start": "2026-10-15", "end": "2026-10-28", "values": { "Team": "Household", "Phase": "Prepare" }, "dependsOn": ["Survey the current system"] },
-    { "title": "Choose the installer", "start": "2026-10-29", "end": "2026-11-02", "values": { "Team": "Household", "Phase": "Prepare" }, "dependsOn": ["Calculate heat demand", "Request three quotes"] },
-    { "title": "Check subsidies and permits", "start": "2026-11-03", "end": "2026-11-06", "values": { "Team": "Household", "Phase": "Prepare" }, "dependsOn": ["Choose the installer"] },
-    { "title": "Order the heat pump", "start": "2026-11-03", "end": "2026-11-04", "values": { "Team": "Installer", "Phase": "Prepare" }, "dependsOn": ["Choose the installer"] },
-    { "title": "Delivery", "start": "2026-11-05", "end": "2026-11-18", "values": { "Team": "Installer", "Phase": "Install" }, "dependsOn": ["Order the heat pump"] },
-    { "title": "Upgrade the electrical panel", "start": "2026-11-09", "end": "2026-11-11", "values": { "Team": "Electrician", "Phase": "Install" }, "dependsOn": ["Check subsidies and permits"] },
-    { "title": "Pour the outdoor foundation", "start": "2026-11-12", "end": "2026-11-13", "values": { "Team": "Installer", "Phase": "Install" }, "dependsOn": ["Check subsidies and permits"] },
-    { "title": "Remove the old heat pump", "start": "2026-11-19", "end": "2026-11-19", "values": { "Team": "Installer", "Phase": "Install" }, "dependsOn": ["Delivery", "Pour the outdoor foundation"] },
-    { "title": "Install indoor and outdoor units", "start": "2026-11-20", "end": "2026-11-24", "values": { "Team": "Installer", "Phase": "Install" }, "dependsOn": ["Remove the old heat pump"] },
-    { "title": "Connect power", "start": "2026-11-25", "end": "2026-11-25", "values": { "Team": "Electrician", "Phase": "Install" }, "dependsOn": ["Upgrade the electrical panel", "Install indoor and outdoor units"] },
-    { "title": "Commission and balance", "start": "2026-11-26", "end": "2026-11-27", "values": { "Team": "Installer", "Phase": "Finish" }, "dependsOn": ["Connect power"] },
-    { "title": "Recycle the old unit", "start": "2026-11-30", "end": "2026-12-01", "values": { "Team": "Installer", "Phase": "Finish" }, "dependsOn": ["Remove the old heat pump"] },
-    { "title": "Follow-up check", "start": "2026-12-14", "end": "2026-12-14", "values": { "Team": "Household", "Phase": "Finish" }, "dependsOn": ["Commission and balance"] }
+    { "title": "Set the launch goals", "start": "2027-01-11", "end": "2027-01-13", "progress": 100, "values": { "Team": "Marketing", "Phase": "Plan" } },
+    { "title": "Interview users", "start": "2027-01-14", "end": "2027-01-22", "values": { "Team": "Design", "Phase": "Plan" }, "dependsOn": ["Set the launch goals"] },
+    { "title": "Plan the architecture", "start": "2027-01-14", "end": "2027-01-20", "values": { "Team": "Engineering", "Phase": "Plan" }, "dependsOn": ["Set the launch goals"] },
+    { "title": "Plan the campaign", "start": "2027-01-14", "end": "2027-01-27", "values": { "Team": "Marketing", "Phase": "Plan" }, "dependsOn": ["Set the launch goals"] },
+    { "title": "Design the app", "start": "2027-01-25", "end": "2027-02-05", "values": { "Team": "Design", "Phase": "Build" }, "dependsOn": ["Interview users"] },
+    { "title": "Build the backend", "start": "2027-01-21", "end": "2027-02-12", "values": { "Team": "Engineering", "Phase": "Build" }, "dependsOn": ["Plan the architecture"] },
+    { "title": "Build the app", "start": "2027-02-15", "end": "2027-03-05", "values": { "Team": "Engineering", "Phase": "Build" }, "dependsOn": ["Design the app", "Build the backend"] },
+    { "title": "Create app store assets", "start": "2027-02-08", "end": "2027-02-19", "values": { "Team": "Design", "Phase": "Build" }, "dependsOn": ["Design the app"] },
+    { "title": "Build the launch page", "start": "2027-02-22", "end": "2027-03-03", "values": { "Team": "Marketing", "Phase": "Build" }, "dependsOn": ["Plan the campaign", "Create app store assets"] },
+    { "title": "Beta test", "start": "2027-03-08", "end": "2027-03-19", "values": { "Team": "Engineering", "Phase": "Launch" }, "dependsOn": ["Build the app"] },
+    { "title": "Fix beta feedback", "start": "2027-03-22", "end": "2027-03-26", "values": { "Team": "Engineering", "Phase": "Launch" }, "dependsOn": ["Beta test"] },
+    { "title": "App store review", "start": "2027-03-29", "end": "2027-04-02", "values": { "Team": "Engineering", "Phase": "Launch" }, "dependsOn": ["Fix beta feedback"] },
+    { "title": "Brief press and partners", "start": "2027-03-29", "end": "2027-04-02", "values": { "Team": "Marketing", "Phase": "Launch" }, "dependsOn": ["Build the launch page", "Fix beta feedback"] },
+    { "title": "Run the launch campaign", "start": "2027-04-06", "end": "2027-04-16", "values": { "Team": "Marketing", "Phase": "Launch" }, "dependsOn": ["App store review", "Brief press and partners"] },
+    { "title": "Review user feedback", "start": "2027-04-26", "end": "2027-04-30", "values": { "Team": "Design", "Phase": "Launch" }, "dependsOn": ["Run the launch campaign"] }
   ],
-  "milestones": [{ "title": "Heating back on", "date": "2026-11-28", "dependsOn": ["Commission and balance"] }],
+  "milestones": [{ "title": "Launch day", "date": "2027-04-05", "dependsOn": ["App store review", "Brief press and partners"] }],
   "view": { "type": "timeline", "groupBy": "Phase", "colorBy": "Team" }
 }
 ```
@@ -79,35 +80,35 @@ The agent assumes durations a typical installation takes, names the dimensions T
 `node tidigar-link.mjs plan.json` prints the link, a summary to check against the request and the link's size:
 
 ```text
-https://open.tidigar.com/s#t=1~n=Replace_the_heat_pump~d=From_survey_to_a_warm_house_before_winter.~y=2026~m1=Team:Household,Installer,Electrician~m2=Phase:Prepare,Install,Finish~a1=Survey_the_current_system/10-12/3/Household,Prepare/100p~a2=Calculate_heat_demand/10-15/5/Installer,Prepare/@a1~a3=Request_three_quotes/10-15/14/Household,Prepare/@a1~a4=Choose_the_installer/10-29/5/Household,Prepare/@a2,a3~a5=Check_subsidies_and_permits/11-03/4/Household,Prepare/@a4~a6=Order_the_heat_pump/11-03/2/Installer,Prepare/@a4~a7=Delivery/11-05/14/Installer,Install/@a6~a8=Upgrade_the_electrical_panel/11-09/3/Electrician,Install/@a5~a9=Pour_the_outdoor_foundation/11-12/2/Installer,Install/@a5~a10=Remove_the_old_heat_pump/11-19/1/Installer,Install/@a7,a9~a11=Install_indoor_and_outdoor_units/11-20/5/Installer,Install/@a10~a12=Connect_power/11-25/1/Electrician,Install/@a8,a11~a13=Commission_and_balance/11-26/2/Installer,Finish/@a12~a14=Recycle_the_old_unit/11-30/2/Installer,Finish/@a10~a15=Follow-up_check/12-14/1/Household,Finish/@a13~s1=Heating_back_on/11-28/@a13~v=timeline/color:Team/group:Phase/start:10-12/end:12-14~c=15.1.0~!
+https://open.tidigar.com/s#t=1~n=Launch_the_new_app~d=From_goals_to_launch_day_and_the_first_weeks_after.~y=2027~m1=Team:Design,Engineering,Marketing~m2=Phase:Plan,Build,Launch~a1=Set_the_launch_goals/01-11/3/Marketing,Plan/100p~a2=Interview_users/01-14/9/Design,Plan/@a1~a3=Plan_the_architecture/01-14/7/Engineering,Plan/@a1~a4=Plan_the_campaign/01-14/14/Marketing,Plan/@a1~a5=Design_the_app/01-25/12/Design,Build/@a2~a6=Build_the_backend/01-21/23/Engineering,Build/@a3~a7=Build_the_app/02-15/19/Engineering,Build/@a5,a6~a8=Create_app_store_assets/02-08/12/Design,Build/@a5~a9=Build_the_launch_page/02-22/10/Marketing,Build/@a4,a8~a10=Beta_test/03-08/12/Engineering,Launch/@a7~a11=Fix_beta_feedback/03-22/5/Engineering,Launch/@a10~a12=App_store_review/03-29/5/Engineering,Launch/@a11~a13=Brief_press_and_partners/03-29/5/Marketing,Launch/@a9,a11~a14=Run_the_launch_campaign/04-06/11/Marketing,Launch/@a12,a13~a15=Review_user_feedback/04-26/5/Design,Launch/@a14~s1=Launch_day/04-05/@a12,a13~v=timeline/color:Team/group:Phase/start:01-11/end:04-30~c=15.1.0~!
 
-Replace the heat pump (2026)
-activities[0] Survey the current system: 2026-10-12 – 2026-10-14 · 100% done · Team: Household · Phase: Prepare
-activities[1] Calculate heat demand: 2026-10-15 – 2026-10-19 · Team: Installer · Phase: Prepare · after activities[0]
-activities[2] Request three quotes: 2026-10-15 – 2026-10-28 · Team: Household · Phase: Prepare · after activities[0]
-activities[3] Choose the installer: 2026-10-29 – 2026-11-02 · Team: Household · Phase: Prepare · after activities[1], activities[2]
-activities[4] Check subsidies and permits: 2026-11-03 – 2026-11-06 · Team: Household · Phase: Prepare · after activities[3]
-activities[5] Order the heat pump: 2026-11-03 – 2026-11-04 · Team: Installer · Phase: Prepare · after activities[3]
-activities[6] Delivery: 2026-11-05 – 2026-11-18 · Team: Installer · Phase: Install · after activities[5]
-activities[7] Upgrade the electrical panel: 2026-11-09 – 2026-11-11 · Team: Electrician · Phase: Install · after activities[4]
-activities[8] Pour the outdoor foundation: 2026-11-12 – 2026-11-13 · Team: Installer · Phase: Install · after activities[4]
-activities[9] Remove the old heat pump: 2026-11-19 – 2026-11-19 · Team: Installer · Phase: Install · after activities[6], activities[8]
-activities[10] Install indoor and outdoor units: 2026-11-20 – 2026-11-24 · Team: Installer · Phase: Install · after activities[9]
-activities[11] Connect power: 2026-11-25 – 2026-11-25 · Team: Electrician · Phase: Install · after activities[7], activities[10]
-activities[12] Commission and balance: 2026-11-26 – 2026-11-27 · Team: Installer · Phase: Finish · after activities[11]
-activities[13] Recycle the old unit: 2026-11-30 – 2026-12-01 · Team: Installer · Phase: Finish · after activities[9]
-activities[14] Follow-up check: 2026-12-14 – 2026-12-14 · Team: Household · Phase: Finish · after activities[12]
-milestones[0] Heating back on: 2026-11-28 · after activities[12]
+Launch the new app (2027)
+activities[0] Set the launch goals: 2027-01-11 – 2027-01-13 · 100% done · Team: Marketing · Phase: Plan
+activities[1] Interview users: 2027-01-14 – 2027-01-22 · Team: Design · Phase: Plan · after activities[0]
+activities[2] Plan the architecture: 2027-01-14 – 2027-01-20 · Team: Engineering · Phase: Plan · after activities[0]
+activities[3] Plan the campaign: 2027-01-14 – 2027-01-27 · Team: Marketing · Phase: Plan · after activities[0]
+activities[4] Design the app: 2027-01-25 – 2027-02-05 · Team: Design · Phase: Build · after activities[1]
+activities[5] Build the backend: 2027-01-21 – 2027-02-12 · Team: Engineering · Phase: Build · after activities[2]
+activities[6] Build the app: 2027-02-15 – 2027-03-05 · Team: Engineering · Phase: Build · after activities[4], activities[5]
+activities[7] Create app store assets: 2027-02-08 – 2027-02-19 · Team: Design · Phase: Build · after activities[4]
+activities[8] Build the launch page: 2027-02-22 – 2027-03-03 · Team: Marketing · Phase: Build · after activities[3], activities[7]
+activities[9] Beta test: 2027-03-08 – 2027-03-19 · Team: Engineering · Phase: Launch · after activities[6]
+activities[10] Fix beta feedback: 2027-03-22 – 2027-03-26 · Team: Engineering · Phase: Launch · after activities[9]
+activities[11] App store review: 2027-03-29 – 2027-04-02 · Team: Engineering · Phase: Launch · after activities[10]
+activities[12] Brief press and partners: 2027-03-29 – 2027-04-02 · Team: Marketing · Phase: Launch · after activities[8], activities[10]
+activities[13] Run the launch campaign: 2027-04-06 – 2027-04-16 · Team: Marketing · Phase: Launch · after activities[11], activities[12]
+activities[14] Review user feedback: 2027-04-26 – 2027-04-30 · Team: Design · Phase: Launch · after activities[13]
+milestones[0] Launch day: 2027-04-05 · after activities[11], activities[12]
 
-Fragment: 1103 of 1900 characters.
+Fragment: 1030 of 1900 characters.
 ```
 
-The summary shows every dependency in order and nothing after mid-December, so the agent answers:
+The summary shows every dependency in order and launch day after the app store review, so the agent answers:
 
 ```text
-Here is your heat pump plan in Tidigar: [Replace the heat pump](https://open.tidigar.com/s#t=1~n=Replace_the_heat_pump~d=From_survey_to_a_warm_house_before_winter.~y=2026~m1=Team:Household,Installer,Electrician~m2=Phase:Prepare,Install,Finish~a1=Survey_the_current_system/10-12/3/Household,Prepare/100p~a2=Calculate_heat_demand/10-15/5/Installer,Prepare/@a1~a3=Request_three_quotes/10-15/14/Household,Prepare/@a1~a4=Choose_the_installer/10-29/5/Household,Prepare/@a2,a3~a5=Check_subsidies_and_permits/11-03/4/Household,Prepare/@a4~a6=Order_the_heat_pump/11-03/2/Installer,Prepare/@a4~a7=Delivery/11-05/14/Installer,Install/@a6~a8=Upgrade_the_electrical_panel/11-09/3/Electrician,Install/@a5~a9=Pour_the_outdoor_foundation/11-12/2/Installer,Install/@a5~a10=Remove_the_old_heat_pump/11-19/1/Installer,Install/@a7,a9~a11=Install_indoor_and_outdoor_units/11-20/5/Installer,Install/@a10~a12=Connect_power/11-25/1/Electrician,Install/@a8,a11~a13=Commission_and_balance/11-26/2/Installer,Finish/@a12~a14=Recycle_the_old_unit/11-30/2/Installer,Finish/@a10~a15=Follow-up_check/12-14/1/Household,Finish/@a13~s1=Heating_back_on/11-28/@a13~v=timeline/color:Team/group:Phase/start:10-12/end:12-14~c=15.1.0~!)
+Here is your launch plan in Tidigar: [Launch the new app](https://open.tidigar.com/s#t=1~n=Launch_the_new_app~d=From_goals_to_launch_day_and_the_first_weeks_after.~y=2027~m1=Team:Design,Engineering,Marketing~m2=Phase:Plan,Build,Launch~a1=Set_the_launch_goals/01-11/3/Marketing,Plan/100p~a2=Interview_users/01-14/9/Design,Plan/@a1~a3=Plan_the_architecture/01-14/7/Engineering,Plan/@a1~a4=Plan_the_campaign/01-14/14/Marketing,Plan/@a1~a5=Design_the_app/01-25/12/Design,Build/@a2~a6=Build_the_backend/01-21/23/Engineering,Build/@a3~a7=Build_the_app/02-15/19/Engineering,Build/@a5,a6~a8=Create_app_store_assets/02-08/12/Design,Build/@a5~a9=Build_the_launch_page/02-22/10/Marketing,Build/@a4,a8~a10=Beta_test/03-08/12/Engineering,Launch/@a7~a11=Fix_beta_feedback/03-22/5/Engineering,Launch/@a10~a12=App_store_review/03-29/5/Engineering,Launch/@a11~a13=Brief_press_and_partners/03-29/5/Marketing,Launch/@a9,a11~a14=Run_the_launch_campaign/04-06/11/Marketing,Launch/@a12,a13~a15=Review_user_feedback/04-26/5/Design,Launch/@a14~s1=Launch_day/04-05/@a12,a13~v=timeline/color:Team/group:Phase/start:01-11/end:04-30~c=15.1.0~!)
 
-I assumed two weeks for delivery and that the old unit is removed the day
-before installation. The heating is back on 28 November; open the link to
-move anything, and the activities after it follow.
+I started on Monday 11 January and assumed a two-week beta and a week for the
+app store review. Launch day is 5 April; open the link to move anything, and
+the activities after it follow.
 ```

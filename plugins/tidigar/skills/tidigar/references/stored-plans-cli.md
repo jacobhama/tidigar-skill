@@ -114,7 +114,8 @@ curl -sS -X PATCH -H "$AUTH" -H "$JSON" --data-binary @screen.json "$API/organiz
 curl -sS -H "$AUTH" "$API/organizations/$ORG/plans/$PLAN_ID/screens/$SCREEN_ID/link"
 ```
 
-- `GET /token`: `organization.id` is `ORG`; `writable` says whether you may save.
+- `GET /token`: `organization.id` is `ORG`; `writable` says whether you may save;
+  `readable: false` means the organisation is not paid and its plans answer `402`.
   `GET /organizations/:org/plans` lists plans.
 - New plan: send `{ "plan": … }` to `POST /organizations/:org/plans/validate`, which answers
   `{ project, summary }`, then create with `{ "project": … }` to keep its ID.

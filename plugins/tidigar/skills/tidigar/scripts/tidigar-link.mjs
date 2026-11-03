@@ -923,6 +923,17 @@ const scope = { crypto: globalThis.crypto };
     return value;
   }
 
+  /* The milestone of another plan that an incoming milestone copies: that
+   * plan's `manifest.projectId` and the milestone's ID, the same in every
+   * storage. */
+  function milestoneSourceValue(value, path, ownProjectId) {
+    if (value === undefined) return null;
+    const source = requireRecord(value, path);
+    const projectId = uuidValue(source.projectId, `${path}.projectId`);
+    if (projectId === ownProjectId) invalid(`${path}.projectId`, 'must name another plan');
+    return { projectId, id: uuidValue(source.id, `${path}.id`) };
+  }
+
   function normalizeMilestones(value, contextInput, itemIds, registry = makeIdRegistry()) {
     const context = contextFrom(contextInput);
     const milestones = requireArray(value, 'milestones', MAX_MILESTONES);
@@ -945,7 +956,19 @@ const scope = { crypto: globalThis.crypto };
           invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
       }
       const ref = refValue(source.ref, `${path}.ref`);
-      return { id, projectId, title, date, dependsOn, fixed, ...(ref ? { ref } : {}) };
+      const origin = milestoneSourceValue(source.source, `${path}.source`, projectId);
+      // An incoming milestone is another plan's date: it waits for nothing here.
+      if (origin && !fixed) invalid(`${path}.source`, 'needs a fixed milestone');
+      return {
+        id,
+        projectId,
+        title,
+        date,
+        dependsOn,
+        fixed,
+        ...(ref ? { ref } : {}),
+        ...(origin ? { source: origin } : {}),
+      };
     });
   }
 
@@ -1413,6 +1436,12 @@ const scope = { crypto: globalThis.crypto };
           record.dependsOn = kept;
           mark(collection, record.id, 'dependsOn');
         };
+        // Another plan's date only stays one while the milestone is fixed.
+        for (const point of milestones)
+          if (point.fixed !== true && point.source !== undefined) {
+            delete point.source;
+            mark('milestones', point.id, 'source');
+          }
         for (const item of items) keep(item, 'items', (id) => byId.has(id) || fixed.has(id));
         for (const point of milestones)
           if (point.fixed !== true) keep(point, 'milestones', (id) => byId.has(id));
@@ -2418,7 +2447,7 @@ const scope = { crypto: globalThis.crypto };
     // Option names, one per dimension, as option numbers in dimension order.
     const valuesOf = (list, where) => {
       const values = dimensionList.map(() => 0);
-      for (const raw of list.split(',')) {
+      for (const [slot, raw] of list.split(',').entries()) {
         if (!raw.trim()) continue;
         const colon = raw.indexOf(':');
         const named = colon < 0 ? null : text(raw.slice(0, colon));
@@ -2434,12 +2463,15 @@ const scope = { crypto: globalThis.crypto };
           note(where, `no dimension has the option ${JSON.stringify(name)}; it was left empty`);
           continue;
         }
-        if (matches.length > 1)
+        // Shared names follow the comma-separated dimension positions.
+        // Unique names still work out of order; explicit names take priority.
+        const positional = named === null && matches.find(([index]) => index === slot);
+        if (matches.length > 1 && !positional)
           note(
             where,
             `${JSON.stringify(option)} is an option of several dimensions; the first was used`,
           );
-        const [index, number] = matches[0];
+        const [index, number] = positional || matches[0];
         if (values[index] && values[index] !== number)
           note(
             where,

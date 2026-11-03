@@ -101,7 +101,9 @@ save. Offer a separate copy only if the user wants one.
 - `agent_access_off`, insufficient membership or `subscription_required`:
   explain the actual restriction. A write grant cannot override membership,
   subscription or the organisation owner's policy. Do not switch credentials
-  or protocols to bypass it.
+  or protocols to bypass it. `subscription_required` on a read means the
+  organisation is not paid: its plans are unavailable until an owner
+  subscribes, and the same connection works again afterwards.
 - `no_such_plan`: check the selected organisation and plan link with the user.
 - `rate_limited`: respect `retryAfter`. After an uncertain write, read before
   any retry.

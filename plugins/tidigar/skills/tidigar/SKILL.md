@@ -63,7 +63,9 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
   day; in work days with `w`. Then, in any order: its options by name
   (`Design,Plan`), `@a1,s2` for what it waits for, `@a1:50` for a partial
   dependency, `0p`, `25p`, `50p`, `75p` or `100p` for progress and `d=` for a
-  description. Use `Team:Design` when option names repeat across dimensions,
+  description. List options in dimension order: repeated names such as
+  `Network,Network` select the first and second dimensions respectively.
+  Use `Team:Design` to select a dimension explicitly,
   or `Size:50p` when an option looks like progress.
 - An activity normally starts at least one day after each predecessor ends.
   `@a1:50` instead allows a start after half its planned days, rounded up;
