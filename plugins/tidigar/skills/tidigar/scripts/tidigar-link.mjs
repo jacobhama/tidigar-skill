@@ -2594,7 +2594,7 @@ const scope = { crypto: globalThis.crypto };
 
     // The initial view: `timeline/classic/rows:Team/color:Phase`; a layout
     // word alone means a timeline.
-    let classic = false;
+    let classic = !fields.has('v');
     if (fields.has('v')) {
       const [mode, ...settings] = fields.get('v').split('/');
       const view = {};
@@ -3925,8 +3925,8 @@ const scope = { crypto: globalThis.crypto };
           `The share link holds an invalid roadmap. ${readable.inKeys(error.message, read.keys)}`,
         );
       }
-      // A readable link opens as a new plan does; `classic` asks for its
-      // Classic view.
+      // A readable link opens as a new plan does; without a requested view,
+      // or with `classic`, it starts in Classic.
       const { corrections: tidied = [], ...rest } = result;
       const opened = { ...rest, readable: { classic: read.classic } };
       const corrections = [

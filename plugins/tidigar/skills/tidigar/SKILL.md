@@ -59,7 +59,8 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
 - `m1=Team:Design,Development` is a dimension and its options in order. Number
   records from 1 without gaps: `m1`, `m2`, `a1`, `a2`, `s1`, `p1`.
 - `a1=title/start/days` is an activity. The start is `MM-DD` in year `y`,
-  or `YYYY-MM-DD` for another year. Days counts its days, `1` for a single
+  or `YYYY-MM-DD` for another year, including plans spanning several years.
+  Short dates always use `y`. Days counts its days, `1` for a single
   day; in work days with `w`. Then, in any order: its options by name
   (`Design,Plan`), `@a1,s2` for what it waits for, `@a1:50` for a partial
   dependency, `0p`, `25p`, `50p`, `75p` or `100p` for progress and `d=` for a
@@ -81,8 +82,9 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
 - `v=` opens the roadmap: `timeline`, `board`, `list`, `flow`, `classic` (one
   row per activity under a label column, as in MS Project) or `compact`, then
   `group:Team`, `color:Team`, `rows:Team` or `columns:Phase`.
-- With no `v=`, the link opens a timeline grouped and colored by the first
-  dimension, with the first and second dimensions as board rows and columns.
+- With no `v=`, the link opens in Classic, summarized by the first dimension.
+  Classic is the first saved view and frames the plan's dates with three days
+  of margin on each side. An explicit `v=` keeps the requested view.
   A view can also set a date range with `/start:03-01/end:06-30`.
 - `c=2.1.0` counts the activities, milestones and periods.
 - `_` is a space. In text, escape `/` as `%2F`, `~` as `%7E`, `_` as

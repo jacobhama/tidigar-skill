@@ -62,8 +62,11 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
 ```
 
 - **Title**, then **start**: `MM-DD` in year `y`, or `YYYY-MM-DD` for another
-  year. Then **days**: how many days it lasts, `1` for a single day. In a
-  roadmap planned in work days these are work days, skipping weekends and
+  year. Short dates always use `y`; they do not roll into the next year
+  when the month decreases. A plan may cross several year boundaries:
+  with `y=2026`, use `12-29`, `2027-12-30` and `2028-01-10` for starts
+  in those three years. Then **days**: how many days it lasts, `1` for a
+  single day. In a roadmap planned in work days these are work days, skipping weekends and
   vacation periods.
 - Then, in any order:
   - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
@@ -143,8 +146,11 @@ Opening the same link again on a device selects the copy it made.
 
 The copy is made as a new roadmap is: its activities and milestones get
 reference keys in the link's order, such as `WL-1`, `WL-2`, under the prefix
-`r=` gives or one made from the roadmap's name, and it gets the Classic view
-beside the view it opens in.
+`r=` gives or one made from the roadmap's name. Its first saved view is
+Classic, framed from the earliest activity or milestone to the latest end
+or milestone, with three days of margin on each side. Later periods remain
+visible. Without `v=`, the plan opens in Classic; an explicit `v=` is
+respected.
 
 Tidigar reads a link leniently and says what it did. What has an obvious fix
 is fixed and reported by record, for example `a3: no dimension has the
