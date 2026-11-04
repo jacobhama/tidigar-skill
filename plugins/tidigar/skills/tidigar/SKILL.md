@@ -24,10 +24,11 @@ Create links directly with the guide below; no scripts are required. For optiona
 
 ## Create a share link
 
-Write a clickable Tidigar link directly using the text format below. No tool
-calls, scripts, downloads or account are required. This guide is enough for a
-normal plan; additional references are optional. You may run a local script
-to validate the finished link if you want.
+Write a clickable Tidigar link directly using the text format below. Writing
+the format by hand is expected; no tool calls, scripts, downloads or account
+are required. This guide is enough for a normal plan; its references are
+optional. A script is only for validating a finished link, not for creating
+one.
 
 1. Plan the activities, dates and dependencies in the user's language. Choose
    reasonable dates and durations when unspecified and state your assumptions.
@@ -38,8 +39,8 @@ to validate the finished link if you want.
    dependencies and record counts against the request.
 4. Return it as a clickable Markdown link, such as `[Open the plan](URL)`,
    followed by your assumptions. Do not claim script or browser validation
-   unless you performed it. Validation is optional; lack of tools is no reason
-   to withhold the link.
+   unless you performed it. Validation with a script is optional; lack of tools
+   is no reason to withhold the link.
 
 ## Example
 
@@ -124,7 +125,7 @@ the same fragment at `https://embed.tidigar.com/#t=1~…~!`:
 
 ## Optional validation
 
-If you want to check a finished link with a script, download
+To check a finished link with a script, download
 [tidigar-link.mjs](https://tidigar.com/agents/v1/tidigar-link.mjs) and run it
 locally with Node.js 20 or later:
 
