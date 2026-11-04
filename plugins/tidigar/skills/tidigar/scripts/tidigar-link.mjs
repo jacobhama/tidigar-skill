@@ -1347,16 +1347,12 @@ const scope = { crypto: globalThis.crypto };
       invalid('manifest.formatVersion', 'cannot downgrade a stored project');
     if (
       after.manifest.formatVersion === 3 &&
-      (before.items.length ||
-        before.milestones.length ||
-        after.items.length ||
-        after.milestones.length) &&
       (before.manifest.formatVersion === 2 ||
         (before.manifest.precision || 'days') !== after.manifest.precision)
     )
       invalid(
         'manifest.precision',
-        'a populated plan keeps its precision; use a separate identity',
+        'an existing plan keeps its precision; use a separate identity',
       );
     return after;
   }
@@ -1673,9 +1669,42 @@ const scope = { crypto: globalThis.crypto };
     return sanitized === OMIT ? null : sanitized;
   }
 
+  // Check causality across the authorized projects available to this host.
+  // Anchor movement affects all local clock records, never independent incoming ones.
+  function assertSourceCycles(project, others = []) {
+    const projects = [
+        ...others.filter((other) => other.manifest?.projectId !== project.manifest.projectId),
+        project,
+      ],
+      edges = new Map(),
+      address = (plan, id) => `${plan}/${id}`;
+    for (const current of projects) {
+      const plan = current.manifest.projectId,
+        anchor = current.manifest.dateAnchor;
+      for (const record of [...(current.items || []), ...(current.milestones || [])]) {
+        const parents = (record.dependsOn || []).map((id) => address(plan, id));
+        if (record.source) parents.push(address(record.source.projectId, record.source.id));
+        else if (anchor) parents.push(address(anchor.source.projectId, anchor.source.id));
+        edges.set(address(plan, record.id), parents);
+      }
+    }
+    const visiting = new Set(),
+      done = new Set();
+    function visit(id) {
+      if (visiting.has(id)) throw Error('The link would create a causal source cycle');
+      if (done.has(id)) return;
+      visiting.add(id);
+      for (const parent of edges.get(id) || []) visit(parent);
+      visiting.delete(id);
+      done.add(id);
+    }
+    for (const id of edges.keys()) visit(id);
+  }
+
   return {
     // The editor remains date-only; persistence transports opt in explicitly.
     copyAsTimedProject,
+    assertSourceCycles,
     createTimedProfile: () => createModel(root, true),
     projectInstant,
     resolveLocal,
