@@ -1257,6 +1257,16 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
+  // First conversion is a copy: the caller must save it to a separate destination.
+  function copyAsTimedProject(value, options) {
+    if (!timed) invalid('manifest.formatVersion', 'requires the timed model profile');
+    const copied = copyAsNewProject(value, options);
+    return normalizeProject({
+      ...copied,
+      manifest: { ...copied.manifest, formatVersion: 2, timeZone: zoneValue(options.timeZone) },
+    });
+  }
+
   /**
    * Whether a view shows an activity: every set filter matches and the
    * search finds its text in the activity's reference key, title,
@@ -1524,7 +1534,8 @@ const scope = { crypto: globalThis.crypto };
   }
 
   return {
-    // Not installed in any editor, storage, server or host entry point yet.
+    // The editor remains date-only; persistence transports opt in explicitly.
+    copyAsTimedProject,
     createTimedProfile: () => createModel(root, true),
     projectInstant,
     resolveLocal,
