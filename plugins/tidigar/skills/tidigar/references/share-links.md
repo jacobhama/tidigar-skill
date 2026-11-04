@@ -105,15 +105,16 @@ p1=Autumn_break/10-26/5
 
 - `m1=Team:Household,Installer` names a dimension and its options in order.
   A link has no colors: options take Tidigar's standard colors in order.
-- `v=` opens the roadmap in `timeline`, `board`, `list` or `flow`, followed
-  by `rows:`, `columns:`, `color:` or `group:` and a dimension's name, and by
-  `start:` and `end:` and a date for the timeline's span:
+- `v=` selects `timeline`, `board`, `list` or `flow`. `rows:`, `columns:`,
+  `color:` and `group:` take a dimension name; `start:`/`end:` take dates:
   `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
 - Words set how a timeline looks: `classic` shows one activity per row under
   a fixed label column with reference keys, as in MS Project, and opens the
   roadmap in its Classic view; `compact` lets activities share rows; `minimal`,
   `airy`, `contrast` and `terminal` choose a style. A word alone means a
   timeline: `v=classic`.
+
+`row`/`col` accept `"progress"`: `v=board/columns:progress`.
 
 ### Text
 

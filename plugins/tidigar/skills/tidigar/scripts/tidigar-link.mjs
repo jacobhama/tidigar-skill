@@ -67,6 +67,7 @@ const scope = { crypto: globalThis.crypto };
   // in a Tidigar Cloud plan. It holds no people; dimension IDs are UUIDs, so
   // it never names a dimension.
   const ASSIGNEE_AXIS = 'assignee';
+  const PROGRESS_AXIS = 'progress';
   // Values renamed when their default changed. Reading one gives the new
   // default, so stored views, calendars and links take up the new look once;
   // a choice made afterwards uses the new name and stays.
@@ -823,11 +824,15 @@ const scope = { crypto: globalThis.crypto };
   }
 
   // Board rows and columns and timeline grouping may also be the assignee.
-  function normalizeAxisReference(value, validIds, path) {
+  function normalizeAxisReference(value, validIds, path, board = false) {
+    if (board && value === PROGRESS_AXIS) return value;
     if (value === ASSIGNEE_AXIS) return value;
     if (value === undefined || value === '') return '';
     if (typeof value !== 'string' || !validIds.has(value))
-      invalid(path, `must reference a manifest dimension, be "${ASSIGNEE_AXIS}" or be empty`);
+      invalid(
+        path,
+        `must reference a manifest dimension, be "${ASSIGNEE_AXIS}"${board ? `, "${PROGRESS_AXIS}"` : ''} or be empty`,
+      );
     return value;
   }
 
@@ -906,8 +911,8 @@ const scope = { crypto: globalThis.crypto };
       }
       const mode = source.view === undefined ? 'grid' : source.view;
       if (!VIEWS.has(mode)) invalid(`${path}.view`, 'must be grid, timeline, list, or flow');
-      const row = normalizeAxisReference(source.row, dimensions, `${path}.row`);
-      const col = normalizeAxisReference(source.col, dimensions, `${path}.col`);
+      const row = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
+      const col = normalizeAxisReference(source.col, dimensions, `${path}.col`, true);
       const color = normalizeDimensionReference(source.color, dimensions, `${path}.color`);
       const flowGroup = normalizeDimensionReference(
         source.flowGroup,
@@ -1677,6 +1682,7 @@ const scope = { crypto: globalThis.crypto };
     uuid,
     maxViews: MAX_VIEWS,
     assigneeAxis: ASSIGNEE_AXIS,
+    progressAxis: PROGRESS_AXIS,
     enumValues: ENUM_VALUES,
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
@@ -1794,7 +1800,8 @@ const scope = { crypto: globalThis.crypto };
               typeof view[field] === 'string' &&
               view[field] &&
               !options.has(view[field]) &&
-              !(view[field] === 'assignee' && ['row', 'col', 'group'].includes(field))
+              !(view[field] === 'assignee' && ['row', 'col', 'group'].includes(field)) &&
+              !(view[field] === 'progress' && ['row', 'col'].includes(field))
             ) {
               view[field] = '';
               mark('sharedViews', view.id, field);
@@ -2516,7 +2523,13 @@ const scope = { crypto: globalThis.crypto };
       const readView = (view, where) => {
         for (const field of DIMENSION_FIELDS) {
           const value = view[field];
-          if (value === undefined || value === '' || Number.isInteger(value)) continue;
+          if (
+            value === undefined ||
+            value === '' ||
+            Number.isInteger(value) ||
+            (value === 'progress' && ['row', 'col'].includes(field))
+          )
+            continue;
           const index = dimensions.findIndex(([name]) => sameText(name, String(value)));
           const read = index >= 0 ? index : /^\d+$/.test(String(value).trim()) ? Number(value) : '';
           note(where, `${field} ${show(value)} became ${show(read)}`);
@@ -3101,6 +3114,7 @@ const scope = { crypto: globalThis.crypto };
             'v',
             `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, start or end`,
           );
+        else if (['row', 'col'].includes(field) && name === 'progress') view[field] = 'progress';
         else if (index < 0)
           note('v', `${axis}: no dimension is called ${JSON.stringify(text(name))}`);
         else view[field] = index;
@@ -3770,7 +3784,9 @@ const scope = { crypto: globalThis.crypto };
           if (OMITTED_VIEW_FIELDS.has(key)) continue;
           const value = DIMENSION_FIELDS.has(key) && stored === model.assigneeAxis ? '' : stored;
           if (JSON.stringify(value) === JSON.stringify(defaults[key])) continue;
-          if (DIMENSION_FIELDS.has(key)) packed[key] = value ? dimensionIndex.get(value) : '';
+          if (DIMENSION_FIELDS.has(key))
+            packed[key] =
+              value === model.progressAxis ? value : value ? dimensionIndex.get(value) : '';
           else if (COLUMN_FIELDS.has(key))
             packed[key] = value.map((column) =>
               dimensionIndex.has(column) ? dimensionIndex.get(column) : column,
@@ -4076,7 +4092,9 @@ const scope = { crypto: globalThis.crypto };
         objectValue(packed);
         const view = {};
         for (const [key, value] of Object.entries(packed)) {
-          if (DIMENSION_FIELDS.has(key)) view[key] = value === '' ? '' : at(dimensions, value).id;
+          if (DIMENSION_FIELDS.has(key))
+            view[key] =
+              value === model.progressAxis ? value : value === '' ? '' : at(dimensions, value).id;
           else if (COLUMN_FIELDS.has(key))
             view[key] = list(value).map((column) =>
               typeof column === 'number' ? at(dimensions, column).id : column,
@@ -4284,7 +4302,8 @@ const scope = { crypto: globalThis.crypto };
         const prune = (record) => {
           if (!record) return record;
           for (const key of DIMENSION_FIELDS)
-            if (record[key] && !dimensionIds.has(record[key])) record[key] = '';
+            if (record[key] && record[key] !== model.progressAxis && !dimensionIds.has(record[key]))
+              record[key] = '';
           for (const key of COLUMN_FIELDS)
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
