@@ -1368,8 +1368,6 @@ const scope = { crypto: globalThis.crypto };
    */
   function serializeCalendarMetadata(project, section, recordId) {
     const normalized = normalizeProject(project);
-    if (normalized.manifest.formatVersion !== 1)
-      invalid('calendarMetadata', 'timed calendar profile is not enabled');
     let payload;
     if (section === 'manifest') {
       const { dimensions: _dimensions, ...manifest } = JSON.parse(
@@ -1390,7 +1388,7 @@ const scope = { crypto: globalThis.crypto };
     }
     return JSON.stringify({
       format: CALENDAR_METADATA_FORMAT,
-      version: CALENDAR_METADATA_VERSION,
+      version: normalized.manifest.formatVersion === 2 ? 3 : CALENDAR_METADATA_VERSION,
       section,
       payload,
     });
@@ -1406,19 +1404,22 @@ const scope = { crypto: globalThis.crypto };
     exactKeys(source, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
     if (source.format !== CALENDAR_METADATA_FORMAT)
       invalid('calendarMetadata.format', 'unsupported');
-    if (source.version !== CALENDAR_METADATA_VERSION)
+    if (![2, ...(timed ? [3] : [])].includes(source.version))
       invalid('calendarMetadata.version', 'unsupported');
     if (!CALENDAR_METADATA_SECTIONS.has(section))
       invalid('section', 'must be manifest, view or dimension');
     if (source.section !== section) invalid('calendarMetadata.section', 'unexpected section');
-    if (contextFrom(contextInput).formatVersion === 2)
-      invalid('calendarMetadata', 'timed calendar profile is not enabled');
+    if (
+      section !== 'manifest' &&
+      source.version !== (contextFrom(contextInput).formatVersion === 2 ? 3 : 2)
+    )
+      invalid('calendarMetadata.version', 'profile mismatch');
     const payload = requireRecord(source.payload, 'calendarMetadata.payload');
     exactKeys(payload, [section], 'calendarMetadata.payload');
     if (section === 'manifest') {
       const manifest = requireRecord(payload.manifest, 'calendarMetadata.payload.manifest');
-      if (manifest.formatVersion !== 1)
-        invalid('calendarMetadata', 'timed calendar profile is not enabled');
+      if (source.version !== (manifest.formatVersion === 2 ? 3 : 2))
+        invalid('calendarMetadata.version', 'profile mismatch');
       if (hasOwn(manifest, 'dimensions'))
         invalid('calendarMetadata.payload.manifest.dimensions', 'belong to dimension events');
       return { manifest: deserializeManifest({ ...manifest, dimensions: [] }) };
