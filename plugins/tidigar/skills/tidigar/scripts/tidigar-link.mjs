@@ -30,7 +30,8 @@ const scope = { crypto: globalThis.crypto };
  *
  *   {
  *     manifest: {
- *       projectId, formatVersion, name, description, dimensions, year
+ *       projectId, formatVersion, name, description, dimensions, year,
+ *       timeZone, nightHours
  *     },
  *     items, sharedViews, milestones, periodIndicators
  *   }
@@ -45,14 +46,17 @@ const scope = { crypto: globalThis.crypto };
   const api = factory(root);
   if (typeof module === 'object' && module && module.exports) module.exports = api;
   if (root) root.tidigarModel = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function createModel(root, timed) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function createtidigarModel(root) {
   'use strict';
 
   const DAY = 86400000;
+  const MINUTE = 60000;
   const MIN_DATE = '1900-01-01';
   const MAX_DATE = '2200-12-31';
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const CLOCK_PATTERN = /^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/;
+  const NIGHT_PATTERN = /^(([01]\d|2[0-3]):[0-5]\d)-(([01]\d|2[0-3]):[0-5]\d)$/;
   const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
   const VIEWS = new Set(['grid', 'timeline', 'list', 'flow']);
   const RESOLUTIONS = new Set(['year', 'quarter', 'month', 'week']);
@@ -184,130 +188,92 @@ const scope = { crypto: globalThis.crypto };
     return value;
   }
 
-  // The timed profile is opt-in while persistence readers and guards roll out.
-  function zoneValue(value, path = 'timeZone') {
-    if (typeof value !== 'string' || !value || /^[+-]/.test(value))
-      invalid(path, 'expected a named time zone');
+  // A local wall-clock minute, `YYYY-MM-DDTHH:mm` with no zone, as a
+  // timestamp on the same axis as `parseDate`.
+  function parseClock(value) {
+    if (typeof value !== 'string' || !CLOCK_PATTERN.test(value)) return NaN;
+    return Number.isFinite(parseDate(value.slice(0, 10))) ? Date.parse(`${value}:00Z`) : NaN;
+  }
+
+  /*
+   * A value's precision is its shape: a date is a day and a local time a
+   * minute, in the same fields of one plan. Both read `end` as the last unit
+   * a record occupies, so a successor starts at `end + unit`.
+   */
+  const DAY_SCALE = Object.freeze({
+    precision: 'days',
+    unit: DAY,
+    parse: parseDate,
+    iso: (date) => date.toISOString().slice(0, 10),
+    min: parseDate(MIN_DATE),
+    max: parseDate(MAX_DATE),
+  });
+  const CLOCK_SCALE = Object.freeze({
+    precision: 'clock',
+    unit: MINUTE,
+    parse: parseClock,
+    iso: (date) => date.toISOString().slice(0, 16),
+    min: parseDate(MIN_DATE),
+    max: parseDate(MAX_DATE) + DAY - MINUTE,
+  });
+  /** The scale of a stored value, or of the precision `'clock'` or `'days'`. */
+  function timeScale(value) {
+    return value === 'clock' || (typeof value === 'string' && CLOCK_PATTERN.test(value))
+      ? CLOCK_SCALE
+      : DAY_SCALE;
+  }
+  const isClock = (value) => typeof value === 'string' && CLOCK_PATTERN.test(value);
+  /** A stored value as a timestamp on the shared local axis: a day at 00:00. */
+  const timeOf = (value) => timeScale(value).parse(value);
+  /** The first moment after a record's end, in that record's unit. */
+  const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
+  /** The first moment at or after `time` where a record shaped like `like`
+   * may start: a day record starts only at midnight. */
+  const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
+  // The values a plan's records hold: activity starts and milestone dates.
+  const recordTimes = (project) => [
+    ...(project?.items || []).map((item) => item.start),
+    ...(project?.milestones || []).map((point) => point.date),
+  ];
+  /** Whether a plan holds any local time; `only` when it holds nothing else. */
+  function holdsLocalTimes(project, { only = false } = {}) {
+    const times = recordTimes(project);
+    return only ? times.length > 0 && times.every(isClock) : times.some(isClock);
+  }
+  /** A timestamp written in the shape of `like`. */
+  const valueAt = (time, like) => timeScale(like).iso(new Date(time));
+
+  function scaleValue(value, path) {
+    if (!Number.isFinite(timeOf(value))) invalid(path, 'expected a valid date or local time');
+    return value;
+  }
+
+  function zoneValue(value, path) {
+    if (typeof value !== 'string' || !value || value.length > 64)
+      invalid(path, 'expected a time zone');
     try {
-      new Intl.DateTimeFormat('en', { timeZone: value }).format(0);
-    } catch {
-      invalid(path, 'unknown time zone');
+      new Intl.DateTimeFormat('en', { timeZone: value });
+    } catch (_error) {
+      invalid(path, 'expected a named time zone');
     }
     return value;
   }
 
-  function instantValue(value, path = 'instant') {
-    if (
-      typeof value !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/.test(value) ||
-      !Number.isFinite(Date.parse(value)) ||
-      new Date(value).toISOString().replace('.000Z', 'Z') !== value
-    )
-      invalid(path, 'expected a UTC instant with minute precision');
+  // The night a timeline shades at hours: `HH:mm-HH:mm`, local wall-clock
+  // times; a start after the end runs across midnight.
+  function nightValue(value) {
+    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
+    if (!match || match[1] === match[3])
+      invalid('manifest.nightHours', 'expected two different times as HH:mm-HH:mm');
     return value;
   }
 
-  function projectInstant(value, timeZone) {
-    instantValue(value);
-    zoneValue(timeZone);
-    const parts = Object.fromEntries(
-      new Intl.DateTimeFormat('en-GB', {
-        timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hourCycle: 'h23',
-      })
-        .formatToParts(new Date(value))
-        .map(({ type, value }) => [type, value]),
-    );
-    const date = `${parts.year}-${parts.month}-${parts.day}`;
-    dateValue(date, 'instant.date');
-    return { date, time: `${parts.hour}:${parts.minute}`, second: parts.second };
-  }
-
-  // Return every matching instant. Zero is a skipped hour; two requires a
-  // caller's explicit offset choice. No normalization or device-zone fallback.
-  function resolveLocal(date, time, timeZone) {
-    dateValue(date, 'local.date');
-    if (typeof time !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
-      invalid('local.time', 'expected HH:mm');
-    zoneValue(timeZone);
-    const wall = Date.parse(`${date}T${time}:00Z`);
-    const offsets = new Set();
-    for (let hours = -48; hours <= 48; hours += 6) {
-      const probe = wall + hours * 3600000;
-      let local;
-      try {
-        local = projectInstant(new Date(probe).toISOString().replace('.000Z', 'Z'), timeZone);
-      } catch {
-        continue;
-      }
-      offsets.add(Date.parse(`${local.date}T${local.time}:${local.second}Z`) - probe);
-    }
-    if (offsets.size && [...offsets].every((offset) => offset % 60000 !== 0))
-      invalid('local.time', 'historical zone offset cannot represent minute-precision clock input');
-    const candidates = [];
-    for (const offset of offsets) {
-      const instant = new Date(wall - offset).toISOString().replace('.000Z', 'Z');
-      // Historical sub-minute offsets have no minute-precision representation.
-      if (!instant.endsWith(':00Z')) continue;
-      let local;
-      try {
-        local = projectInstant(instant, timeZone);
-      } catch {
-        continue;
-      }
-      if (local.date === date && local.time === time)
-        candidates.push({ instant, offsetMinutes: offset / 60000 });
-    }
-    return candidates.sort((a, b) => a.instant.localeCompare(b.instant));
-  }
-
-  function temporalFields(source, context, path, point = false) {
-    const fields = {};
-    if (
-      context.formatVersion === 3 &&
-      context.precision === 'days' &&
-      source.fixedStart !== undefined
-    )
-      invalid(`${path}.fixedStart`, 'requires clock plan precision');
-    if (
-      context.formatVersion === 3 &&
-      context.precision === 'clock' &&
-      source.startAfter !== undefined
-    )
-      invalid(`${path}.startAfter`, 'clock plans cannot use percentage overlap');
-    for (const key of ['timing', 'fixedStart', 'timelineWindow']) {
-      if (source[key] !== undefined && (!timed || ![2, 3].includes(context.formatVersion)))
-        invalid(`${path}.${key}`, 'requires the timed model profile');
-    }
-    if (source.timing !== undefined) {
-      const timing = requireRecord(source.timing, `${path}.timing`);
-      const names = point ? ['at', 'timeZone'] : ['start', 'end', 'timeZone'];
-      if (Object.keys(timing).sort().join() !== names.sort().join())
-        invalid(`${path}.timing`, 'unexpected timing fields');
-      zoneValue(timing.timeZone, `${path}.timing.timeZone`);
-      for (const key of point ? ['at'] : ['start', 'end']) {
-        instantValue(timing[key], `${path}.timing.${key}`);
-        const local = projectInstant(timing[key], timing.timeZone);
-        projectInstant(timing[key], context.timeZone);
-        if (local.date !== source[point ? 'date' : key])
-          invalid(`${path}.timing`, 'zone-rule mismatch: authored date requires explicit repair');
-      }
-      if (!point && timing.end <= timing.start)
-        invalid(`${path}.timing`, 'end must be after start');
-      fields.timing = { ...timing };
-    }
-    if (source.fixedStart !== undefined) {
-      if (point || source.fixedStart !== true)
-        invalid(`${path}.fixedStart`, 'must be true on an activity');
-      fields.fixedStart = true;
-    }
-    return fields;
+  /** A night's start and end as minutes of the day, or null for none. */
+  function nightMinutes(value) {
+    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
+    if (!match || match[1] === match[3]) return null;
+    const minutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3));
+    return { start: minutes(match[1]), end: minutes(match[3]) };
   }
 
   function dateTimestamp(value) {
@@ -463,11 +429,7 @@ const scope = { crypto: globalThis.crypto };
     if (!isRecord(value)) invalid('context', 'expected a project, manifest, or project ID');
 
     const source = isRecord(value.manifest) ? value.manifest : value;
-    const context = {
-      formatVersion: source.formatVersion,
-      timeZone: source.timeZone,
-      precision: source.precision,
-    };
+    const context = {};
     if (hasOwn(source, 'projectId')) context.projectId = uuidValue(source.projectId, 'projectId');
     if (Array.isArray(source.dimensions)) {
       context.dimensions = source.dimensions;
@@ -519,68 +481,12 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
-  // Source identity is separate from the receiving local clock commitment.
-  function dateAnchorValue(value, projectId) {
-    const path = 'manifest.dateAnchor';
-    const anchor = requireRecord(value, path);
-    exactKeys(anchor, ['source', 'accepted', 'milestoneId', 'localTime'], path);
-    const source = milestoneSourceValue(anchor.source, `${path}.source`, projectId);
-    if (!source) invalid(`${path}.source`, 'required');
-    const accepted = requireRecord(anchor.accepted, `${path}.accepted`);
-    exactKeys(accepted, ['date'], `${path}.accepted`);
-    if (typeof anchor.localTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(anchor.localTime))
-      invalid(`${path}.localTime`, 'expected HH:mm');
-    return {
-      source,
-      accepted: { date: dateValue(accepted.date, `${path}.accepted.date`) },
-      milestoneId: uuidValue(anchor.milestoneId, `${path}.milestoneId`),
-      localTime: anchor.localTime,
-    };
-  }
-
-  function projectionValue(value, context, source, date, path) {
-    if (value === undefined) return {};
-    if (context.formatVersion !== 3 || context.precision !== 'days' || !source)
-      invalid(path, 'requires an incoming milestone in a strict day plan');
-    const projection = requireRecord(value, path);
-    exactKeys(projection, ['timeZone', 'accepted'], path);
-    const timeZone = zoneValue(projection.timeZone, `${path}.timeZone`);
-    const accepted = requireRecord(projection.accepted, `${path}.accepted`);
-    exactKeys(accepted, ['at', 'timeZone'], `${path}.accepted`);
-    const at = instantValue(accepted.at, `${path}.accepted.at`);
-    const authoredZone = zoneValue(accepted.timeZone, `${path}.accepted.timeZone`);
-    projectInstant(at, authoredZone);
-    if (projectInstant(at, timeZone).date !== date)
-      invalid(path, 'accepted instant disagrees with projected date');
-    return { projection: { timeZone, accepted: { at, timeZone: authoredZone } } };
-  }
-
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
-    if (source.formatVersion !== 1 && !(timed && [2, 3].includes(source.formatVersion)))
-      invalid('manifest.formatVersion', 'unsupported model version');
-    if (source.formatVersion === 1 && source.timeZone !== undefined)
-      invalid('manifest.timeZone', 'requires the timed model profile');
-    if (
-      source.formatVersion !== 3 &&
-      (source.precision !== undefined || source.dateAnchor !== undefined)
-    )
-      invalid('manifest.precision', 'requires model version 3');
-    if (source.formatVersion === 3) {
-      if (!['days', 'clock'].includes(source.precision))
-        invalid('manifest.precision', 'must be days or clock');
-      if (
-        source.precision === 'days' &&
-        (source.timeZone !== undefined || source.dateAnchor !== undefined)
-      )
-        invalid('manifest.timeZone', 'day plans cannot carry a clock zone or date anchor');
-      if (
-        source.precision === 'clock' &&
-        source.schedule !== undefined &&
-        source.schedule !== 'calendar-days'
-      )
-        invalid('manifest.schedule', 'clock plans require calendar-days');
-    }
+    if (source.formatVersion !== 1) invalid('manifest.formatVersion', 'must be 1');
+    const timeZone =
+      source.timeZone === undefined ? undefined : zoneValue(source.timeZone, 'manifest.timeZone');
+    const nightHours = source.nightHours === undefined ? undefined : nightValue(source.nightHours);
     const projectId = uuidValue(source.projectId, 'manifest.projectId');
     if (registry.has(projectId)) invalid('manifest.projectId', 'duplicate ID');
     registry.add(projectId, 'manifest.projectId');
@@ -610,18 +516,13 @@ const scope = { crypto: globalThis.crypto };
     return {
       projectId,
       formatVersion: source.formatVersion,
-      ...(source.formatVersion === 3 ? { precision: source.precision } : {}),
-      ...(source.dateAnchor === undefined
-        ? {}
-        : { dateAnchor: dateAnchorValue(source.dateAnchor, projectId) }),
-      ...([2, 3].includes(source.formatVersion) && source.precision !== 'days'
-        ? { timeZone: zoneValue(source.timeZone, 'manifest.timeZone') }
-        : {}),
+      ...(timeZone ? { timeZone } : {}),
       name,
       description,
       dimensions,
       year: source.year,
       schedule,
+      ...(nightHours ? { nightHours } : {}),
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
       // Only a project with reference keys carries its prefix.
       ...(refPrefix ? { refPrefix } : {}),
@@ -707,6 +608,13 @@ const scope = { crypto: globalThis.crypto };
     return Math.min(passed, after);
   }
 
+  // How a record that starts too early after a dependency is told so: by its
+  // unit when both hold dates or both local times.
+  const afterMessage = (value, end, dependency) =>
+    isClock(value) === isClock(end)
+      ? `must be at least one ${isClock(value) ? 'minute' : 'day'} after dependency ${dependency} ends`
+      : `must start after dependency ${dependency} ends`;
+
   // An activity waits for other activities and for fixed milestones,
   // events on a set date that wait for nothing themselves.
   function validateItemDependencies(items, path = 'items', milestones = []) {
@@ -731,8 +639,10 @@ const scope = { crypto: globalThis.crypto };
     }
     for (const item of items) visit(item);
 
-    // Tidigar dependencies are finish-to-start with one whole day between
-    // records; a fixed milestone lets work start on its own date. An
+    // Tidigar dependencies are finish-to-start with one whole unit of the
+    // predecessor, a day or a minute, between records, and a day record
+    // starts at the next midnight; a fixed milestone lets work start at its
+    // own date. An
     // activity that starts after part of another starts no earlier than that
     // one: editors place it by `startThreshold`, but the stored contract does
     // not depend on the work calendar, so a new vacation never invalidates a
@@ -741,17 +651,17 @@ const scope = { crypto: globalThis.crypto };
     for (const item of items) {
       for (const dependency of item.dependsOn) {
         const point = fixed.get(dependency);
-        const predecessor = point || byId.get(dependency);
-        if (item.timing || predecessor.timing) continue;
         if (point) {
           if (item.startAfter?.[dependency] !== undefined)
             invalid(`${path}.${item.id}.startAfter`, `must not name fixed milestone ${dependency}`);
-          if (item.start < point.date)
+          if (timeOf(item.start) < startingAt(timeOf(point.date), item.start))
             invalid(`${path}.${item.id}.start`, `must not be before fixed milestone ${dependency}`);
           continue;
         }
         const parent = byId.get(dependency);
         if (item.startAfter?.[dependency] !== undefined) {
+          if (isClock(parent.start))
+            invalid(`${path}.${item.id}.startAfter`, 'only day records overlap');
           if (item.start < parent.start)
             invalid(
               `${path}.${item.id}.start`,
@@ -759,11 +669,8 @@ const scope = { crypto: globalThis.crypto };
             );
           continue;
         }
-        if (dateTimestamp(item.start) < dayAfter(parent.end))
-          invalid(
-            `${path}.${item.id}.start`,
-            `must be at least one day after dependency ${dependency} ends`,
-          );
+        if (timeOf(item.start) < startingAt(timeAfter(parent.end), item.start))
+          invalid(`${path}.${item.id}.start`, afterMessage(item.start, parent.end, dependency));
       }
     }
   }
@@ -785,14 +692,17 @@ const scope = { crypto: globalThis.crypto };
       const progress = source.progress === undefined ? 0 : source.progress;
       if (!PROGRESS_VALUES.has(progress))
         invalid(`${path}.progress`, 'must be one of 0, 25, 50, 75, or 100');
-      const start = dateValue(source.start, `${path}.start`);
-      const end = dateValue(source.end, `${path}.end`);
+      const start = scaleValue(source.start, `${path}.start`);
+      const end = scaleValue(source.end, `${path}.end`);
+      if (isClock(start) !== isClock(end))
+        invalid(path, 'start and end must both be dates or both local times');
       if (start > end) invalid(path, 'start must not be after end');
+      if (isClock(start) && source.startAfter !== undefined)
+        invalid(`${path}.startAfter`, 'only day records overlap');
       const values = normalizeValues(source.values, context, `${path}.values`);
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
       const ref = refValue(source.ref, `${path}.ref`);
-      if (source.timelineWindow !== undefined) invalid(path, 'activity cannot carry a view window');
       const record = {
         id,
         projectId,
@@ -803,7 +713,6 @@ const scope = { crypto: globalThis.crypto };
         end,
         values,
         dependsOn,
-        ...temporalFields(source, context, path),
       };
       // Only an activity that overlaps another carries the field.
       if (Object.keys(startAfter).length) record.startAfter = startAfter;
@@ -811,7 +720,7 @@ const scope = { crypto: globalThis.crypto };
       return record;
     });
     // A whole project checks dependencies once its milestones are known.
-    if (!deferDependencies) validateItemDependencies(items);
+    if (!deferDependencies) validateItemDependencies(items, 'items');
     return items;
   }
 
@@ -884,31 +793,21 @@ const scope = { crypto: globalThis.crypto };
     const year = Number.isInteger(context.year) ? context.year : new Date().getFullYear();
     const defaultStart = `${year}-01-01`;
     const defaultEnd = `${year}-12-31`;
-    const columnKeys = new Set(['title', 'duration', 'start', 'end', 'dependsOn', ...dimensions]);
+    const columnKeys = new Set([
+      'title',
+      'duration',
+      'start',
+      'end',
+      'dependsOn',
+      'description',
+      ...dimensions,
+    ]);
     return views.map((view, index) => {
       const path = `sharedViews[${index}]`;
       const source = requireRecord(view, path);
       const id = registry.add(source.id, `${path}.id`);
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const name = stringValue(source.name, `${path}.name`, 100, true);
-      temporalFields(source, context, path);
-      if (source.timing !== undefined || source.fixedStart !== undefined)
-        invalid(path, 'view cannot carry record timing');
-      let timelineWindow;
-      if (source.timelineWindow !== undefined) {
-        if (context.formatVersion === 3 && context.precision !== 'clock')
-          invalid(`${path}.timelineWindow`, 'requires clock plan precision');
-        const window = requireRecord(source.timelineWindow, `${path}.timelineWindow`);
-        if (Object.keys(window).sort().join() !== 'end,start')
-          invalid(`${path}.timelineWindow`, 'expected start and end');
-        for (const key of ['start', 'end']) {
-          instantValue(window[key], `${path}.timelineWindow.${key}`);
-          projectInstant(window[key], context.timeZone);
-        }
-        if (window.end <= window.start)
-          invalid(`${path}.timelineWindow`, 'end must be after start');
-        timelineWindow = { start: window.start, end: window.end };
-      }
       const mode = source.view === undefined ? 'grid' : source.view;
       if (!VIEWS.has(mode)) invalid(`${path}.view`, 'must be grid, timeline, list, or flow');
       const row = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
@@ -978,13 +877,29 @@ const scope = { crypto: globalThis.crypto };
         source.timelineStart === undefined ? defaultStart : source.timelineStart;
       const timelineEnd = source.timelineEnd === undefined ? defaultEnd : source.timelineEnd;
       ensureDateRange(timelineStart, timelineEnd, path);
+      // A saved frame is optional and whole: both edges or neither, shaped
+      // like an activity's start and inclusive end.
+      const frame = {};
+      if (source.timelineFrameStart !== undefined || source.timelineFrameEnd !== undefined) {
+        if (source.timelineFrameStart === undefined || source.timelineFrameEnd === undefined)
+          invalid(path, 'a timeline frame needs timelineFrameStart and timelineFrameEnd');
+        const frameStart = scaleValue(source.timelineFrameStart, `${path}.timelineFrameStart`);
+        const frameEnd = scaleValue(source.timelineFrameEnd, `${path}.timelineFrameEnd`);
+        if (isClock(frameStart) !== isClock(frameEnd))
+          invalid(path, 'a timeline frame must be two dates or two local times');
+        if (frameStart > frameEnd) invalid(path, 'a timeline frame must not end before it starts');
+        Object.assign(frame, { timelineFrameStart: frameStart, timelineFrameEnd: frameEnd });
+      }
       const listFallback = ['title', 'start', 'end', ...dimensions];
+      // The column a List sorts by, or "" for flow order. A column that no
+      // longer exists sorts in flow order, as unknown columns are dropped.
+      const listSort = source.listSort === undefined ? '' : source.listSort;
+      if (typeof listSort !== 'string') invalid(`${path}.listSort`, 'expected a column key');
       return {
         id,
         projectId,
         name,
         view: mode,
-        ...(timelineWindow ? { timelineWindow } : {}),
         row,
         col,
         color,
@@ -1068,6 +983,7 @@ const scope = { crypto: globalThis.crypto };
         flowGroup,
         timelineStart,
         timelineEnd,
+        ...frame,
         listColumns: normalizeColumns(
           source.listColumns,
           listFallback,
@@ -1079,6 +995,12 @@ const scope = { crypto: globalThis.crypto };
           listFallback,
           columnKeys,
           `${path}.listColumnOrder`,
+        ),
+        listSort: columnKeys.has(listSort) ? listSort : '',
+        listSortDescending: booleanValue(
+          source.listSortDescending,
+          `${path}.listSortDescending`,
+          false,
         ),
       };
     });
@@ -1178,7 +1100,7 @@ const scope = { crypto: globalThis.crypto };
       const id = registry.add(source.id, `${path}.id`);
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const title = stringValue(source.title, `${path}.title`, 180, true);
-      const date = dateValue(source.date, `${path}.date`);
+      const date = scaleValue(source.date, `${path}.date`);
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       const fixed = booleanValue(source.fixed, `${path}.fixed`, false);
       // A fixed milestone is an event on a set date: work waits for
@@ -1190,8 +1112,6 @@ const scope = { crypto: globalThis.crypto };
           invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
       }
       const ref = refValue(source.ref, `${path}.ref`);
-      if (source.timelineWindow !== undefined)
-        invalid(path, 'milestone cannot carry a view window');
       const origin = milestoneSourceValue(source.source, `${path}.source`, projectId);
       // An incoming milestone is another plan's date: it waits for nothing here.
       if (origin && !fixed) invalid(`${path}.source`, 'needs a fixed milestone');
@@ -1204,8 +1124,6 @@ const scope = { crypto: globalThis.crypto };
         fixed,
         ...(ref ? { ref } : {}),
         ...(origin ? { source: origin } : {}),
-        ...projectionValue(source.projection, context, origin, date, `${path}.projection`),
-        ...temporalFields(source, context, path, true),
       };
     });
   }
@@ -1216,8 +1134,6 @@ const scope = { crypto: globalThis.crypto };
     return indicators.map((indicator, index) => {
       const path = `periodIndicators[${index}]`;
       const source = requireRecord(indicator, path);
-      if (['timing', 'fixedStart', 'timelineWindow'].some((key) => source[key] !== undefined))
-        invalid(path, 'period indicators remain date-only');
       const id = registry.add(source.id, `${path}.id`);
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const title = stringValue(source.title, `${path}.title`, 180, true);
@@ -1237,65 +1153,10 @@ const scope = { crypto: globalThis.crypto };
       for (const dependency of milestone.dependsOn) {
         const parent = byId.get(dependency);
         if (!parent) invalid(`milestones[${index}].dependsOn`, `unknown activity ${dependency}`);
-        if (milestone.timing || parent.timing) continue;
-        if (dateTimestamp(milestone.date) < dayAfter(parent.end))
+        if (timeOf(milestone.date) < startingAt(timeAfter(parent.end), milestone.date))
           invalid(
             `milestones[${index}].date`,
-            `must be at least one day after dependency ${dependency} ends`,
-          );
-      }
-    }
-  }
-
-  function validateTemporalDependencies(project) {
-    const { manifest, items, milestones, periodIndicators } = project;
-    const calendar = manifest.schedule === 'work-days' ? workCalendar(periodIndicators) : null;
-    const permitted = (date) => !calendar || calendar.isWorkDay(dateTimestamp(date));
-    const nextDate = (date) => {
-      const result = new Date(dateTimestamp(date) + DAY).toISOString().slice(0, 10);
-      return dateValue(result, 'dependency.date');
-    };
-    function dayBoundary(date, requirePermitted = true) {
-      // Midnight may be skipped. Boundaries use the first valid minute of an
-      // existing permitted civil date; explicit clock input still rejects gaps.
-      for (let day = date; ; day = nextDate(day)) {
-        if (requirePermitted && !permitted(day)) continue;
-        for (let minute = 0; minute < 1440; minute++) {
-          const time = `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
-          const matches = resolveLocal(day, time, manifest.timeZone);
-          if (matches.length) return matches[0].instant;
-        }
-      }
-    }
-    const byId = new Map([...items, ...milestones].map((record) => [record.id, record]));
-    for (const record of [...items, ...milestones]) {
-      const point = !Object.hasOwn(record, 'start');
-      for (const id of record.dependsOn) {
-        const parent = byId.get(id);
-        if (!record.timing && !parent.timing) continue;
-        if (record.startAfter?.[id] !== undefined)
-          invalid(
-            `items.${record.id}.startAfter`,
-            'timed dependencies cannot use percentage overlap',
-          );
-        const parentPoint = !Object.hasOwn(parent, 'start');
-        if (record.timing && !parent.timing && parentPoint)
-          invalid(`items.${record.id}.dependsOn`, 'specify the milestone time or use whole dates');
-        if (point && record.timing && !parent.timing)
-          invalid(
-            `milestones.${record.id}.dependsOn`,
-            'timed following milestones require timed parents',
-          );
-        const release = parent.timing
-          ? parent.timing[parentPoint ? 'at' : 'end']
-          : dayBoundary(nextDate(parent.end));
-        const start = record.timing
-          ? record.timing[point ? 'at' : 'start']
-          : dayBoundary(point ? record.date : record.start, false);
-        if (start < release)
-          invalid(
-            `${point ? 'milestones' : 'items'}.${record.id}`,
-            `starts before dependency ${id} releases`,
+            afterMessage(milestone.date, parent.end, dependency),
           );
       }
     }
@@ -1313,48 +1174,7 @@ const scope = { crypto: globalThis.crypto };
     const periodIndicators = normalizePeriodIndicators(source.periodIndicators, manifest, registry);
     validateItemDependencies(items, 'items', milestones);
     validateMilestoneDates(milestones, items);
-    const project = { manifest, items, sharedViews, milestones, periodIndicators };
-    if (manifest.formatVersion === 3) {
-      const clock = manifest.precision === 'clock';
-      for (const record of [...items, ...milestones]) {
-        if (Boolean(record.timing) !== clock)
-          invalid('project.precision', 'every record must match plan precision');
-        if (clock && record.startAfter)
-          invalid('items.startAfter', 'clock plans cannot use percentage overlap');
-      }
-      const anchor = manifest.dateAnchor;
-      if (anchor) {
-        const point = milestones.find((value) => value.id === anchor.milestoneId);
-        if (!point || !point.fixed || point.source || !point.timing)
-          invalid('manifest.dateAnchor.milestoneId', 'must identify a local fixed clock milestone');
-        const local = projectInstant(point.timing.at, manifest.timeZone);
-        if (local.date !== anchor.accepted.date || local.time !== anchor.localTime)
-          invalid(
-            'manifest.dateAnchor',
-            'accepted date and local clock must match the local milestone',
-          );
-      }
-    }
-    if ([2, 3].includes(manifest.formatVersion)) validateTemporalDependencies(project);
-    return project;
-  }
-
-  /** Validate an existing identity before replacing its canonical contents. */
-  function validateReplacement(previous, proposed) {
-    const before = normalizeProject(previous);
-    const after = normalizeProject(proposed);
-    if (after.manifest.formatVersion < before.manifest.formatVersion)
-      invalid('manifest.formatVersion', 'cannot downgrade a stored project');
-    if (
-      after.manifest.formatVersion === 3 &&
-      (before.manifest.formatVersion === 2 ||
-        (before.manifest.precision || 'days') !== after.manifest.precision)
-    )
-      invalid(
-        'manifest.precision',
-        'an existing plan keeps its precision; use a separate identity',
-      );
-    return after;
+    return { manifest, items, sharedViews, milestones, periodIndicators };
   }
 
   /**
@@ -1377,16 +1197,6 @@ const scope = { crypto: globalThis.crypto };
       sharedViews: own(source.sharedViews),
       milestones: own(source.milestones),
       periodIndicators: own(source.periodIndicators),
-    });
-  }
-
-  // First conversion is a copy: the caller must save it to a separate destination.
-  function copyAsTimedProject(value, options) {
-    if (!timed) invalid('manifest.formatVersion', 'requires the timed model profile');
-    const copied = copyAsNewProject(value, options);
-    return normalizeProject({
-      ...copied,
-      manifest: { ...copied.manifest, formatVersion: 2, timeZone: zoneValue(options.timeZone) },
     });
   }
 
@@ -1511,12 +1321,7 @@ const scope = { crypto: globalThis.crypto };
     }
     return JSON.stringify({
       format: CALENDAR_METADATA_FORMAT,
-      version:
-        normalized.manifest.formatVersion === 3
-          ? 4
-          : normalized.manifest.formatVersion === 2
-            ? 3
-            : CALENDAR_METADATA_VERSION,
+      version: CALENDAR_METADATA_VERSION,
       section,
       payload,
     });
@@ -1532,29 +1337,16 @@ const scope = { crypto: globalThis.crypto };
     exactKeys(source, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
     if (source.format !== CALENDAR_METADATA_FORMAT)
       invalid('calendarMetadata.format', 'unsupported');
-    if (![2, ...(timed ? [3, 4] : [])].includes(source.version))
+    if (source.version !== CALENDAR_METADATA_VERSION)
       invalid('calendarMetadata.version', 'unsupported');
+    const context = contextInput && typeof contextInput === 'object' ? contextInput : null;
     if (!CALENDAR_METADATA_SECTIONS.has(section))
       invalid('section', 'must be manifest, view or dimension');
     if (source.section !== section) invalid('calendarMetadata.section', 'unexpected section');
-    if (
-      section !== 'manifest' &&
-      source.version !==
-        (contextFrom(contextInput).formatVersion === 3
-          ? 4
-          : contextFrom(contextInput).formatVersion === 2
-            ? 3
-            : 2)
-    )
-      invalid('calendarMetadata.version', 'profile mismatch');
     const payload = requireRecord(source.payload, 'calendarMetadata.payload');
     exactKeys(payload, [section], 'calendarMetadata.payload');
     if (section === 'manifest') {
       const manifest = requireRecord(payload.manifest, 'calendarMetadata.payload.manifest');
-      if (
-        source.version !== (manifest.formatVersion === 3 ? 4 : manifest.formatVersion === 2 ? 3 : 2)
-      )
-        invalid('calendarMetadata.version', 'profile mismatch');
       if (hasOwn(manifest, 'dimensions'))
         invalid('calendarMetadata.payload.manifest.dimensions', 'belong to dimension events');
       return { manifest: deserializeManifest({ ...manifest, dimensions: [] }) };
@@ -1669,45 +1461,7 @@ const scope = { crypto: globalThis.crypto };
     return sanitized === OMIT ? null : sanitized;
   }
 
-  // Check causality across the authorized projects available to this host.
-  // Anchor movement affects all local clock records, never independent incoming ones.
-  function assertSourceCycles(project, others = []) {
-    const projects = [
-        ...others.filter((other) => other.manifest?.projectId !== project.manifest.projectId),
-        project,
-      ],
-      edges = new Map(),
-      address = (plan, id) => `${plan}/${id}`;
-    for (const current of projects) {
-      const plan = current.manifest.projectId,
-        anchor = current.manifest.dateAnchor;
-      for (const record of [...(current.items || []), ...(current.milestones || [])]) {
-        const parents = (record.dependsOn || []).map((id) => address(plan, id));
-        if (record.source) parents.push(address(record.source.projectId, record.source.id));
-        else if (anchor) parents.push(address(anchor.source.projectId, anchor.source.id));
-        edges.set(address(plan, record.id), parents);
-      }
-    }
-    const visiting = new Set(),
-      done = new Set();
-    function visit(id) {
-      if (visiting.has(id)) throw Error('The link would create a causal source cycle');
-      if (done.has(id)) return;
-      visiting.add(id);
-      for (const parent of edges.get(id) || []) visit(parent);
-      visiting.delete(id);
-      done.add(id);
-    }
-    for (const id of edges.keys()) visit(id);
-  }
-
   return {
-    // The editor remains date-only; persistence transports opt in explicitly.
-    copyAsTimedProject,
-    assertSourceCycles,
-    createTimedProfile: () => createModel(root, true),
-    projectInstant,
-    resolveLocal,
     uuid,
     maxViews: MAX_VIEWS,
     assigneeAxis: ASSIGNEE_AXIS,
@@ -1716,12 +1470,19 @@ const scope = { crypto: globalThis.crypto };
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
     startThreshold,
+    timeScale,
+    isClock,
+    holdsLocalTimes,
+    nightMinutes,
+    timeOf,
+    timeAfter,
+    startingAt,
+    valueAt,
     maxRefLength: MAX_REF_LENGTH,
     refPrefixFromName,
     nextRef,
     duplicateRefs,
     normalizeProject,
-    validateReplacement,
     copyAsNewProject,
     activityMatcher,
     normalizeManifest,
@@ -1764,17 +1525,15 @@ const scope = { crypto: globalThis.crypto };
 })(typeof globalThis !== 'undefined' ? globalThis : this, function projectRepairModule() {
   'use strict';
 
-  const DAY = 86400000;
-  const LAST_DAY = Date.parse('2200-12-31T00:00:00Z');
   const VIEW_DIMENSIONS = ['row', 'col', 'color', 'flowGroup', 'group'];
 
   const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   const list = (value) => (Array.isArray(value) ? value.filter(isRecord) : []);
-  const parse = (value) =>
-    typeof value === 'string' ? Date.parse(`${value}T00:00:00Z`) : Number.NaN;
-  const iso = (time) => new Date(time).toISOString().slice(0, 10);
-
   function createFactory({ model }) {
+    // Each value keeps its own precision: a day record starts at midnight.
+    const parse = (value) => (typeof value === 'string' ? model.timeOf(value) : Number.NaN);
+    const after = (value) => (typeof value === 'string' ? model.timeAfter(value) : Number.NaN);
+    const last = (value) => model.timeScale(value).max;
     /**
      * Return `{ project, repairs }`: the normalized project and, in record
      * order, `{ collection, id, fields }` for each record the repair changed.
@@ -1785,9 +1544,6 @@ const scope = { crypto: globalThis.crypto };
     function repairProject(value, { datesOnly = false } = {}) {
       const source = JSON.parse(JSON.stringify(value));
       if (!isRecord(source)) return { project: model.normalizeProject(source), repairs: [] };
-      // Exact/strict profiles have no legacy date repair: validate before reconstruction.
-      if (source.manifest?.formatVersion !== 1)
-        return { project: model.normalizeProject(source), repairs: [] };
       const changed = new Map();
       const mark = (collection, id, field) => {
         const key = `${collection}:${id}`;
@@ -1902,9 +1658,9 @@ const scope = { crypto: globalThis.crypto };
           ? model.workCalendar(list(source.periodIndicators))
           : null;
       const earliest = (item, id) => {
-        if (fixed.has(id)) return parse(fixed.get(id).date);
+        if (fixed.has(id)) return model.startingAt(parse(fixed.get(id).date), item.start);
         const percent = item.startAfter?.[id];
-        if (percent === undefined) return parse(byId.get(id)?.end) + DAY;
+        if (percent === undefined) return model.startingAt(after(byId.get(id)?.end), item.start);
         const parent = byId.get(id);
         if (datesOnly) return parse(parent?.start);
         if (!Number.isFinite(parse(parent.start)) || !Number.isFinite(parse(parent.end)))
@@ -1928,23 +1684,25 @@ const scope = { crypto: globalThis.crypto };
         if (minimum === start) continue;
         let nextStart = minimum;
         let nextEnd = end + (minimum - start);
-        if (calendar) {
+        if (calendar && !model.isClock(item.start)) {
           nextStart = calendar.firstWorkDay(minimum);
           nextEnd = calendar.lastWorkDay(nextStart, calendar.durationOf(start, end));
         }
-        if (nextEnd > LAST_DAY) continue;
-        item.start = iso(nextStart);
-        item.end = iso(nextEnd);
+        if (nextEnd > last(item.end)) continue;
+        item.start = model.valueAt(nextStart, item.start);
+        item.end = model.valueAt(nextEnd, item.end);
         mark('items', item.id, 'start');
       }
       for (const point of milestones) {
         if (point.fixed === true || !Array.isArray(point.dependsOn)) continue;
         const date = parse(point.date);
-        const parents = point.dependsOn.map((id) => parse(byId.get(id)?.end) + DAY);
+        const parents = point.dependsOn.map((id) =>
+          model.startingAt(after(byId.get(id)?.end), point.date),
+        );
         if (!Number.isFinite(date) || !parents.every(Number.isFinite)) continue;
         const minimum = Math.max(...parents, date);
-        if (minimum === date || minimum > LAST_DAY) continue;
-        point.date = iso(minimum);
+        if (minimum === date || minimum > last(point.date)) continue;
+        point.date = model.valueAt(minimum, point.date);
         mark('milestones', point.id, 'date');
       }
 
@@ -2086,34 +1844,6 @@ const scope = { crypto: globalThis.crypto };
      * an Error naming the place for a value it cannot read.
      */
     function tidyPayload(input) {
-      if (input?.version !== undefined || input?.project !== undefined)
-        throw Error('Versioned projects cannot use legacy share repair.');
-      const fields = new Set([
-        'precision',
-        'dateAnchor',
-        'timeZone',
-        'timing',
-        'fixedStart',
-        'projection',
-        'timelineWindow',
-      ]);
-      const profile = (value) =>
-        value &&
-        !Array.isArray(value) &&
-        typeof value === 'object' &&
-        Object.keys(value).some((key) => fields.has(key));
-      const records = (value) =>
-        Array.isArray(value)
-          ? value
-          : value && typeof value === 'object'
-            ? [value, ...Object.values(value)]
-            : [];
-      if (
-        profile(input) ||
-        profile(input?.o) ||
-        ['i', 's', 'v'].some((key) => records(input?.[key]).some(profile))
-      )
-        throw Error('Precision fields cannot use legacy share repair.');
       const corrections = [];
       if (!isRecord(input)) throw Error('The share link holds no roadmap object.');
       const payload = JSON.parse(JSON.stringify(input));
@@ -2655,7 +2385,12 @@ const scope = { crypto: globalThis.crypto };
         } catch (error) {
           const message = String(error.message);
           const field = /^Invalid sharedViews\[0\]\.(\w+)/.exec(message)?.[1];
-          if (field && field !== 'id' && field !== 'projectId' && field in view) {
+          // A frame is kept whole or left out whole.
+          if (/timelineFrame|timeline frame/.test(message)) {
+            corrections.push(`${where}: a timeline frame that could not be read was left out`);
+            delete view.timelineFrameStart;
+            delete view.timelineFrameEnd;
+          } else if (field && field !== 'id' && field !== 'projectId' && field in view) {
             corrections.push(
               `${where}: ${field} ${show(view[field])} was left out (${message.replace(/^Invalid [^:]*: /, '')})`,
             );
@@ -2751,67 +2486,6 @@ const scope = { crypto: globalThis.crypto };
     }
   }
 
-  // Model 2/3 use named canonical records. Values are editable JSON;
-  // only URL-sensitive characters are escaped, never compressed or base64.
-  function readProfile(fragment) {
-    const records = String(fragment).replace(/^#/, '').split('~');
-    const version = Number(records.shift().slice(2));
-    if (![2, 3].includes(version) || records.pop() !== '!')
-      throw Error('Unsupported version or missing end mark.');
-    const project = { items: [], milestones: [], periodIndicators: [], sharedViews: [] };
-    const lists = {
-      activity: 'items',
-      milestone: 'milestones',
-      period: 'periodIndicators',
-      view: 'sharedViews',
-    };
-    const seen = new Set();
-    let view = null;
-    for (const record of records) {
-      const at = record.indexOf('=');
-      if (at < 1) throw Error('Expected a named record and JSON value.');
-      const key = record.slice(0, at);
-      if (seen.has(key)) throw Error(`Duplicate record ${key}.`);
-      seen.add(key);
-      const value = JSON.parse(decodeURIComponent(record.slice(at + 1)));
-      if (key === 'manifest') project.manifest = value;
-      else if (key === 'initialView') view = value;
-      else {
-        const match = /^(activity|milestone|period|view)([1-9][0-9]*)$/.exec(key);
-        if (!match) throw Error(`Unknown record ${key}.`);
-        if (Number(match[2]) !== project[lists[match[1]]].length + 1)
-          throw Error('Record numbers must be consecutive.');
-        project[lists[match[1]]].push(value);
-      }
-    }
-    if (project.manifest?.formatVersion !== version)
-      throw Error('Readable and model versions disagree.');
-    return { payload: { version, project, view }, corrections: [], classic: false, keys: {} };
-  }
-  function writeProfile(payload) {
-    if (
-      ![2, 3].includes(payload.version) ||
-      payload.project?.manifest?.formatVersion !== payload.version
-    )
-      throw Error('Unsupported readable payload version.');
-    const records = [`t=${payload.version}`];
-    const add = (key, value) =>
-      records.push(
-        `${key}=${JSON.stringify(value).replace(/[%~#&\s\u0000-\u001f]/g, (character) => (character === '~' ? '%7E' : encodeURIComponent(character)))}`,
-      );
-    add('manifest', payload.project.manifest);
-    for (const [key, list] of Object.entries({
-      activity: 'items',
-      milestone: 'milestones',
-      period: 'periodIndicators',
-      view: 'sharedViews',
-    }))
-      payload.project[list].forEach((record, index) => add(`${key}${index + 1}`, record));
-    if (payload.view) add('initialView', payload.view);
-    records.push('!');
-    return records.join('~');
-  }
-
   /**
    * Read a readable fragment (with or without `#`). Returns `{ payload,
    * corrections, keys }`: the compact payload, the problems found, and the
@@ -2820,7 +2494,6 @@ const scope = { crypto: globalThis.crypto };
    * for what cannot be read.
    */
   function read(fragment) {
-    if (/^#?t=[23]~/.test(String(fragment))) return readProfile(fragment);
     const corrections = [];
     const note = (where, message) => corrections.push(`${where}: ${message}`);
     // What cannot be read is collected, so one reading names every problem.
@@ -2839,12 +2512,6 @@ const scope = { crypto: globalThis.crypto };
     let ended = false;
     let last = 't';
     for (const [position, record] of records.entries()) {
-      if (
-        /^(manifest|activity[0-9]+|milestone[0-9]+|period[0-9]+|view[0-9]+|initialView)=/.test(
-          record,
-        )
-      )
-        throw Error('Profile records require their explicit readable version.');
       if (record === '') continue;
       if (record === '!') {
         ended = true;
@@ -3218,7 +2885,6 @@ const scope = { crypto: globalThis.crypto };
    * builder that has validated the roadmap. Colors are left out.
    */
   function write(payload) {
-    if (payload.version !== undefined) return writeProfile(payload);
     const year = payload.y;
     const base = Date.UTC(year, 0, 1) / DAY;
     const date = (offset) => {
@@ -3367,7 +3033,6 @@ const scope = { crypto: globalThis.crypto };
   'use strict';
 
   const VERSION = 1;
-  const PREFIX = `s=${VERSION}.`;
   // The whole link stays within 2,000 characters for any Tidigar origin and
   // path of up to 100 characters.
   const MAX_FRAGMENT_LENGTH = 1900;
@@ -3375,6 +3040,7 @@ const scope = { crypto: globalThis.crypto };
   // A lenient reader opens a longer hand-written link and says it is too long.
   const LENIENT_FRAGMENT_LENGTH = 32768;
   const DAY = 86400000;
+  const MINUTE = 60000;
   // A link never carries assignee settings: a copy is no Tidigar Cloud plan,
   // so it has no assignees to arrange or show. Collapsed timeline summaries
   // are personal; an older link that still carries them opens without them.
@@ -3395,6 +3061,8 @@ const scope = { crypto: globalThis.crypto };
     'timelineSummarizeBy',
   ]);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
+  // List columns that are no dimension.
+  const LIST_KEYS = new Set(['title', 'duration', 'start', 'end', 'dependsOn', 'description']);
 
   class ShareLinkError extends Error {
     constructor(code, message, details = {}) {
@@ -3521,7 +3189,13 @@ const scope = { crypto: globalThis.crypto };
   }
 
   // A fragment from a link's data, with its checksum.
-  const sealed = (data, version = VERSION) => `s=${version}.${data}.${checksumOf(data)}`;
+  const sealed = (data) => `s=${VERSION}.${data}.${checksumOf(data)}`;
+  // Whether a packed payload holds a local time: [day offset, minute].
+  const hasClockValues = (payload) =>
+    [
+      ...(Array.isArray(payload?.i) ? payload.i : []),
+      ...(Array.isArray(payload?.s) ? payload.s : []),
+    ].some((entry) => Array.isArray(entry) && Array.isArray(entry[1]));
 
   function toBase64Url(bytes) {
     let binary = '';
@@ -3738,55 +3412,20 @@ const scope = { crypto: globalThis.crypto };
      share-link tidy (`share-link-tidy.js`) that reads a hand-written link
      and reports each correction. Encoders stay strict. */
   function createFactory({ model, repairDates = null, lenient = null, readable = null }) {
-    const transportModel = model.createTimedProfile();
-    // A transport must refuse fields normalization would silently discard.
-    function noDroppedFields(input, normalized, path = 'project') {
-      if (!input || typeof input !== 'object') return;
-      for (const key of Object.keys(input)) {
-        if (!normalized || !Object.prototype.hasOwnProperty.call(normalized, key))
-          throw Error(`Unsupported transport field ${path}.${key}.`);
-        noDroppedFields(input[key], normalized[key], `${path}.${key}`);
-      }
-    }
-    function normalizeTransport(input) {
-      const normalized = transportModel.normalizeProject(input);
-      if (normalized.manifest.formatVersion > 1) noDroppedFields(input, normalized);
-      return normalized;
-    }
-
-    const copy = (value) => JSON.parse(JSON.stringify(value));
-    function sharedView(view) {
-      const result = copy(view);
-      result.showAssignee = false;
-      for (const key of DIMENSION_FIELDS) if (result[key] === model.assigneeAxis) result[key] = '';
-      return result;
-    }
     /* Pack a normalized project into plain JSON values without IDs. */
     function pack(projectInput, initialView) {
-      const project = normalizeTransport(projectInput);
+      const project = model.normalizeProject(projectInput);
       const { manifest } = project;
-      if (manifest.formatVersion > 1) {
-        project.sharedViews = project.sharedViews.map(sharedView);
-        const view = initialView
-          ? sharedView(
-              transportModel.normalizeViews(
-                [
-                  {
-                    ...initialView,
-                    id: initialView.id ?? model.uuid(),
-                    projectId: manifest.projectId,
-                    name: initialView.name ?? '-',
-                  },
-                ],
-                project,
-              )[0],
-            )
-          : null;
-        if (initialView) noDroppedFields(initialView, view, 'initialView');
-        return { version: manifest.formatVersion, project, view };
-      }
       const base = dayNumber(`${manifest.year}-01-01`);
       const day = (date) => dayNumber(date) - base;
+      // A date is a day offset and a local time [day offset, minute of the day].
+      const at = (value) =>
+        model.isClock(value)
+          ? [day(value.slice(0, 10)), Number(value.slice(11, 13)) * 60 + Number(value.slice(14))]
+          : day(value);
+      // An activity's length to its inclusive end, in days or minutes.
+      const length = (item) =>
+        (model.timeOf(item.end) - model.timeOf(item.start)) / model.timeScale(item.start).unit;
       const dimensionIndex = new Map();
       const optionIndex = new Map();
       manifest.dimensions.forEach((dimension, index) => {
@@ -3820,6 +3459,8 @@ const scope = { crypto: globalThis.crypto };
             packed[key] = value.map((column) =>
               dimensionIndex.has(column) ? dimensionIndex.get(column) : column,
             );
+          else if (key === 'listSort')
+            packed[key] = dimensionIndex.has(value) ? dimensionIndex.get(value) : value;
           else if (key === 'filters')
             packed[key] = Object.fromEntries(
               Object.entries(value).map(([id, choice]) => [dimensionIndex.get(id), option(choice)]),
@@ -3839,6 +3480,8 @@ const scope = { crypto: globalThis.crypto };
       const payload = { n: manifest.name, y: manifest.year };
       if (manifest.description) payload.d = manifest.description;
       if (manifest.schedule === 'work-days') payload.w = 1;
+      if (manifest.timeZone) payload.z = manifest.timeZone;
+      if (manifest.nightHours) payload.h = manifest.nightHours;
       if (manifest.refPrefix) payload.r = manifest.refPrefix;
       if (manifest.dimensions.length)
         payload.m = manifest.dimensions.map((dimension) => [
@@ -3850,8 +3493,8 @@ const scope = { crypto: globalThis.crypto };
           trimTail(
             [
               item.title,
-              day(item.start),
-              day(item.end) - day(item.start),
+              at(item.start),
+              length(item),
               item.description,
               item.progress,
               trimZeros(manifest.dimensions.map((dimension) => option(item.values[dimension.id]))),
@@ -3870,7 +3513,7 @@ const scope = { crypto: globalThis.crypto };
           trimTail(
             [
               milestone.title,
-              day(milestone.date),
+              at(milestone.date),
               dependencies(milestone.dependsOn),
               milestone.fixed ? 1 : 0,
               milestone.ref ?? '',
@@ -3957,105 +3600,11 @@ const scope = { crypto: globalThis.crypto };
        the IDs of `like`, position for position, so that a newer link of the
        same roadmap replaces it in place. */
     function unpack(input, { like = null } = {}) {
-      // Negotiate before the legacy tidy can discard unknown fields.
-      if (input?.version !== undefined || input?.project !== undefined) {
-        if (![2, 3].includes(input.version))
-          fail('unsupported-version', 'Unsupported share payload version.');
-        if (Object.keys(input).some((key) => !['version', 'project', 'view', 'c'].includes(key)))
-          fail('invalid', 'Unknown share payload field.');
-        const source = normalizeTransport(input.project);
-        if (source.manifest.formatVersion !== input.version)
-          fail('unsupported-version', 'Share payload and model versions disagree.');
-        const project = copy(source);
-        const ids = new Map([
-          [source.manifest.projectId, like?.manifest.projectId ?? model.uuid()],
-        ]);
-        const allocate = (records, targets = []) =>
-          records.forEach((record, index) => {
-            ids.set(record.id, targets[index]?.id ?? model.uuid());
-            if (record.options) allocate(record.options, targets[index]?.options);
-          });
-        allocate(project.manifest.dimensions, like?.manifest.dimensions);
-        for (const key of ['items', 'milestones', 'periodIndicators', 'sharedViews'])
-          allocate(project[key], like?.[key]);
-        const ref = (id) => ids.get(id) ?? id;
-        const pairs = (object, values = false) =>
-          Object.fromEntries(
-            Object.entries(object).map(([key, value]) => [ref(key), values ? ref(value) : value]),
-          );
-        project.manifest.projectId = ref(project.manifest.projectId);
-        for (const dimension of project.manifest.dimensions) {
-          dimension.id = ref(dimension.id);
-          for (const option of dimension.options) option.id = ref(option.id);
-        }
-        if (project.manifest.dateAnchor)
-          project.manifest.dateAnchor.milestoneId = ref(project.manifest.dateAnchor.milestoneId);
-        const remapView = (value) => {
-          const view = sharedView(value);
-          for (const key of DIMENSION_FIELDS) if (view[key]) view[key] = ref(view[key]);
-          for (const key of COLUMN_FIELDS) if (view[key]) view[key] = view[key].map(ref);
-          if (view.filters) view.filters = pairs(view.filters, true);
-          if (view.colorOverrides) view.colorOverrides = pairs(view.colorOverrides);
-          return view;
-        };
-        for (const key of ['items', 'milestones', 'periodIndicators', 'sharedViews'])
-          project[key] = project[key].map((record) => {
-            const result = key === 'sharedViews' ? remapView(record) : record;
-            result.id = ref(record.id);
-            result.projectId = project.manifest.projectId;
-            if (result.dependsOn) result.dependsOn = result.dependsOn.map(ref);
-            if (result.startAfter) result.startAfter = pairs(result.startAfter);
-            if (result.values) result.values = pairs(result.values, true);
-            return result;
-          });
-        if (input.c !== undefined) project.manifest.shareLinkCreatedAt = input.c;
-        const normalized = transportModel.normalizeProject(project);
-        if (like) transportModel.validateReplacement(like, normalized);
-        const view = input.view
-          ? transportModel.normalizeViews(
-              [
-                {
-                  ...remapView(input.view),
-                  id: model.uuid(),
-                  projectId: normalized.manifest.projectId,
-                  name: input.view.name ?? '-',
-                },
-              ],
-              normalized,
-            )[0]
-          : (normalized.sharedViews[0] ?? null);
-        if (input.view) noDroppedFields(input.view, view, 'initialView');
-        return { project: normalized, view };
-      }
-      const profileFields = new Set([
-        'precision',
-        'dateAnchor',
-        'timeZone',
-        'timing',
-        'fixedStart',
-        'projection',
-        'timelineWindow',
-      ]);
-      const hasProfileFields = (value) =>
-        value &&
-        !Array.isArray(value) &&
-        typeof value === 'object' &&
-        Object.keys(value).some((key) => profileFields.has(key));
-      const records = (value) =>
-        Array.isArray(value)
-          ? value
-          : value && typeof value === 'object'
-            ? [value, ...Object.values(value)]
-            : [];
-      if (
-        hasProfileFields(input) ||
-        hasProfileFields(input?.o) ||
-        ['i', 's', 'v'].some((key) => records(input?.[key]).some(hasProfileFields))
-      )
-        fail('unsupported-version', 'Precision fields require an explicit share version.');
       let payload = input;
       const corrections = [];
-      if (lenient) {
+      // A link with local times is read as it is; hand-written links hold dates.
+      const clock = hasClockValues(input);
+      if (lenient && !clock) {
         const tidied = lenient.tidyPayload(input);
         payload = tidied.payload;
         corrections.push(...tidied.corrections);
@@ -4067,8 +3616,8 @@ const scope = { crypto: globalThis.crypto };
         if (!Array.isArray(value)) fail('invalid', 'The share link has a malformed list.');
         return value;
       };
-      const integer = (value) => {
-        if (!Number.isSafeInteger(value) || Math.abs(value) > 200000)
+      const integer = (value, limit = 200000) => {
+        if (!Number.isSafeInteger(value) || Math.abs(value) > limit)
           fail('invalid', 'The share link has a malformed number.');
         return value;
       };
@@ -4081,6 +3630,23 @@ const scope = { crypto: globalThis.crypto };
       const base = dayNumber(`${String(year).padStart(4, '0')}-01-01`);
       if (!Number.isFinite(base)) fail('invalid', 'The share link has an invalid year.');
       const date = (offset) => new Date((base + integer(offset)) * DAY).toISOString().slice(0, 10);
+      // A day offset, or [day offset, minute of the day] for a local time.
+      const moment = (value) => {
+        if (!Array.isArray(value)) return (base + integer(value)) * DAY;
+        if (value.length !== 2 || !Number.isInteger(value[1]) || value[1] < 0 || value[1] > 1439)
+          fail('invalid', 'The share link has a malformed time.');
+        return (base + integer(value[0])) * DAY + value[1] * MINUTE;
+      };
+      const time = (value) =>
+        new Date(moment(value)).toISOString().slice(0, Array.isArray(value) ? 16 : 10);
+      // The inclusive end `length` days or minutes after the start.
+      const until = (start, length) => {
+        const clockStart = Array.isArray(start),
+          unit = clockStart ? MINUTE : DAY;
+        return new Date(moment(start) + integer(length, clockStart ? 200000 * 1440 : 200000) * unit)
+          .toISOString()
+          .slice(0, clockStart ? 16 : 10);
+      };
       const color = (value) => `#${value}`;
       const id = (record) => record?.id ?? model.uuid();
       const projectId = like?.manifest.projectId ?? model.uuid();
@@ -4128,6 +3694,8 @@ const scope = { crypto: globalThis.crypto };
             view[key] = list(value).map((column) =>
               typeof column === 'number' ? at(dimensions, column).id : column,
             );
+          else if (key === 'listSort')
+            view[key] = typeof value === 'number' ? at(dimensions, value).id : value;
           else if (key === 'filters')
             view[key] = Object.fromEntries(
               Object.entries(objectValue(value)).map(([index, choice]) => {
@@ -4151,6 +3719,8 @@ const scope = { crypto: globalThis.crypto };
         manifest: {
           projectId,
           formatVersion: 1,
+          ...(payload.z === undefined ? {} : { timeZone: payload.z }),
+          ...(payload.h === undefined ? {} : { nightHours: payload.h }),
           ...(payload.c === undefined ? {} : { shareLinkCreatedAt: payload.c }),
           name: payload.n,
           description: payload.d ?? '',
@@ -4189,8 +3759,8 @@ const scope = { crypto: globalThis.crypto };
             title,
             description,
             progress,
-            start: date(start),
-            end: date(integer(start) + integer(length)),
+            start: time(start),
+            end: until(start, length),
             values: Object.fromEntries(
               choices
                 .map((choice, position) => [
@@ -4215,7 +3785,7 @@ const scope = { crypto: globalThis.crypto };
             id: milestoneIds[index],
             projectId,
             title,
-            date: date(day),
+            date: time(day),
             dependsOn: dependencies(dependsOn),
             fixed: fixed === 1,
             ...(ref === '' ? {} : { ref }),
@@ -4242,6 +3812,8 @@ const scope = { crypto: globalThis.crypto };
         try {
           return model.normalizeProject(raw);
         } catch (error) {
+          // A link with local times opens only as it was written.
+          if (clock) throw error;
           if (lenient) {
             const repaired = lenient.repair(raw, positionNames(raw));
             repairs = repaired.repairs;
@@ -4288,7 +3860,7 @@ const scope = { crypto: globalThis.crypto };
      * original is not changed.
      */
     function reduce(projectInput, initialView = null, options = {}) {
-      const source = normalizeTransport(projectInput);
+      const source = model.normalizeProject(projectInput);
       const project = JSON.parse(JSON.stringify(source));
       let view = initialView ? JSON.parse(JSON.stringify(initialView)) : null;
       if (options.visibleItemIds) {
@@ -4337,9 +3909,16 @@ const scope = { crypto: globalThis.crypto };
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
                 (column) =>
-                  ['title', 'duration', 'start', 'end', 'dependsOn'].includes(column) ||
-                  dimensionIds.has(column),
+                  ['title', 'duration', 'start', 'end', 'dependsOn', 'description'].includes(
+                    column,
+                  ) || dimensionIds.has(column),
               );
+          if (
+            record.listSort &&
+            !LIST_KEYS.has(record.listSort) &&
+            !dimensionIds.has(record.listSort)
+          )
+            record.listSort = '';
           if (record.filters)
             record.filters = Object.fromEntries(
               Object.entries(record.filters).filter(
@@ -4355,7 +3934,7 @@ const scope = { crypto: globalThis.crypto };
         project.sharedViews.forEach(prune);
         view = prune(view);
       }
-      return { project: transportModel.normalizeProject(project), view };
+      return { project: model.normalizeProject(project), view };
     }
 
     /**
@@ -4367,8 +3946,6 @@ const scope = { crypto: globalThis.crypto };
      * so the snapshot's view carries neither.
      */
     function screenSnapshot(projectInput, viewId, { locale } = {}) {
-      if (projectInput?.manifest?.formatVersion !== 1)
-        fail('unsupported-version', 'Screen publication supports day model 1 only.');
       const source = model.normalizeProject(projectInput);
       const chosen = source.sharedViews.find((view) => view.id === viewId);
       if (!chosen) return null;
@@ -4380,6 +3957,7 @@ const scope = { crypto: globalThis.crypto };
       const view = { ...chosen, filters: {}, query: '' };
       const used = new Set([...DIMENSION_FIELDS].map((key) => view[key]).filter(Boolean));
       if (view.view === 'list') for (const column of view.listColumns) used.add(column);
+      if (view.view === 'list' && view.listSort) used.add(view.listSort);
       project.manifest.dimensions = project.manifest.dimensions.filter((dimension) =>
         used.has(dimension.id),
       );
@@ -4391,9 +3969,11 @@ const scope = { crypto: globalThis.crypto };
       for (const key of COLUMN_FIELDS)
         view[key] = view[key].filter(
           (column) =>
-            ['title', 'duration', 'start', 'end', 'dependsOn'].includes(column) ||
+            ['title', 'duration', 'start', 'end', 'dependsOn', 'description'].includes(column) ||
             known.has(column),
         );
+      if (view.listSort && !LIST_KEYS.has(view.listSort) && !known.has(view.listSort))
+        view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
@@ -4419,7 +3999,7 @@ const scope = { crypto: globalThis.crypto };
     ) {
       const payload = pack(project, initialView);
       if (createdAt !== null) {
-        transportModel.normalizeManifest({ ...project.manifest, shareLinkCreatedAt: createdAt });
+        model.normalizeManifest({ ...project.manifest, shareLinkCreatedAt: createdAt });
         payload.c = createdAt;
       }
       const json = JSON.stringify(payload);
@@ -4428,7 +4008,7 @@ const scope = { crypto: globalThis.crypto };
         Infinity,
       );
       const data = toBase64Url(bytes);
-      const fragment = sealed(data, payload.version ?? VERSION);
+      const fragment = sealed(data);
       if (fragment.length > MAX_FRAGMENT_LENGTH)
         fail('too-large', 'The roadmap is too large for a share link.', {
           length: fragment.length,
@@ -4451,7 +4031,7 @@ const scope = { crypto: globalThis.crypto };
         }
       const match = /^s=(\d+)\.(.*)$/s.exec(text);
       if (!match) fail('not-share-link', 'This is not a share link.');
-      if (!['1', '2', '3'].includes(match[1]))
+      if (match[1] !== String(VERSION))
         fail('unsupported-version', 'This share link needs a newer version of Tidigar.');
       const limit = lenient ? LENIENT_FRAGMENT_LENGTH : MAX_FRAGMENT_LENGTH;
       if (text.length > limit)
@@ -4479,7 +4059,7 @@ const scope = { crypto: globalThis.crypto };
             ? 'The share link is damaged: its data holds characters outside base64url.'
             : 'The share link is damaged.',
         );
-      if (checksum === checksumOf(data)) return { data, corrections, version: Number(match[1]) };
+      if (checksum === checksumOf(data)) return { data, corrections };
       if (!lenient)
         fail('corrupt', 'The share link is damaged: its data does not match its checksum.');
       // A checksum that is missing or itself damaged cannot vouch for the data.
@@ -4489,12 +4069,12 @@ const scope = { crypto: globalThis.crypto };
             ? `link: the checksum ${JSON.stringify(checksum)} is damaged; the data could not be checked`
             : 'link: the link has no checksum, so damage on the way could not be detected',
         );
-        return { data, corrections, version: Number(match[1]) };
+        return { data, corrections };
       }
       const restored = restorations(data, checksum);
       if (restored.length === 1) {
         corrections.push(`link: the link was damaged on the way; ${restored[0].edit}`);
-        return { data: restored[0].data, corrections, version: Number(match[1]) };
+        return { data: restored[0].data, corrections };
       }
       fail(
         'corrupt',
@@ -4525,15 +4105,13 @@ const scope = { crypto: globalThis.crypto };
       if (!/^\s*\{/.test(text)) fail('corrupt', 'The share link is damaged.');
       return text;
     }
-    function readPayload(text, corrections, options, version) {
+    function readPayload(text, corrections, options) {
       let payload;
       try {
         payload = JSON.parse(text);
       } catch (error) {
         fail('invalid', `The share link holds no valid JSON. ${error.message}`);
       }
-      if ((payload.version ?? 1) !== version)
-        fail('unsupported-version', 'Share envelope and payload versions disagree.');
       let result;
       try {
         result = unpack(payload, options);
@@ -4600,7 +4178,7 @@ const scope = { crypto: globalThis.crypto };
 
     async function decode(fragment, options) {
       if (lenient && readable?.isReadable(fragment)) return readReadable(fragment, options);
-      const { data, corrections, version } = readFragment(fragment);
+      const { data, corrections } = readFragment(fragment);
       const bytes = base64UrlBytes(data);
       for (const [input, note] of readings(bytes)) {
         let text;
@@ -4617,12 +4195,7 @@ const scope = { crypto: globalThis.crypto };
           if (error instanceof ShareLinkError && error.code !== 'corrupt') throw error;
           continue;
         }
-        return readPayload(
-          text,
-          note ? [...corrections, `link: ${note}`] : corrections,
-          options,
-          version,
-        );
+        return readPayload(text, note ? [...corrections, `link: ${note}`] : corrections, options);
       }
       fail('corrupt', 'The share link is damaged.');
     }
@@ -4633,7 +4206,7 @@ const scope = { crypto: globalThis.crypto };
      */
     function decodeSync(fragment, options) {
       if (lenient && readable?.isReadable(fragment)) return readReadable(fragment, options);
-      const { data, corrections, version } = readFragment(fragment);
+      const { data, corrections } = readFragment(fragment);
       const bytes = base64UrlBytes(data);
       for (const [input, note] of readings(bytes)) {
         let text;
@@ -4643,12 +4216,7 @@ const scope = { crypto: globalThis.crypto };
           if (error instanceof ShareLinkError && error.code !== 'corrupt') throw error;
           continue;
         }
-        return readPayload(
-          text,
-          note ? [...corrections, `link: ${note}`] : corrections,
-          options,
-          version,
-        );
+        return readPayload(text, note ? [...corrections, `link: ${note}`] : corrections, options);
       }
       fail('corrupt', 'The share link is damaged.');
     }
@@ -5110,10 +4678,6 @@ const scope = { crypto: globalThis.crypto };
   /** Read a share-link payload back into a plan. Saved views (`v`) and view
       settings the plan has no field for are not carried; `lost` names them. */
   function fromPayload(payload) {
-    if (payload?.version !== undefined || payload?.project !== undefined)
-      throw new PlanError(
-        'The agent plan format supports day model 1 only. Use the canonical project file.',
-      );
     const base = dayNumber(`${String(payload.y).padStart(4, '0')}-01-01`);
     const day = (offset) => isoDate(base + offset);
     const dimensions = (payload.m || []).map(([name, options]) => ({ name, options }));

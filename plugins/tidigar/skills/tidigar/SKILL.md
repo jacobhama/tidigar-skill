@@ -1,12 +1,12 @@
 ---
 name: tidigar
-description: Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar, read or change a Tidigar link, and save, read or change plans stored in Tidigar Business or Tidigar Server. Use when the user asks for a roadmap, timeline, Gantt chart or project plan in Tidigar, asks to save or change a plan in Tidigar, or gives a link to open.tidigar.com or app.tidigar.com.
+description: Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar, read or change a Tidigar link, and save, read or change plans stored in Tidigar or Tidigar Server. Use when the user asks for a roadmap, timeline, Gantt chart or project plan in Tidigar, asks to save or change a plan in Tidigar, or gives a link to open.tidigar.com or app.tidigar.com.
 ---
 
 # Tidigar
 
 > Tidigar is a visual roadmap and Gantt chart editor. Create an editable plan
-> as a link, or work on a plan stored in Tidigar Business or Tidigar Server.
+> as a link, or work on a plan stored in Tidigar or Tidigar Server.
 
 Create links directly with the guide below; no scripts are required. For optional validation, use `node scripts/tidigar-link.mjs --validate "<finished URL>"`. The bundled files are `scripts/tidigar-link.mjs`, `scripts/tidigar_link.py`, `example_sharelink.md`, `references/share-links.md`, `references/plan-json.md`, `references/stored-plans.md` and `references/stored-plans-cli.md`. Use these local references instead of downloading them.
 

@@ -2,7 +2,7 @@
 
 ## Plans stored in Tidigar
 
-Tidigar Business and Tidigar Server keep plans for an organisation. Use this section when the user
+Tidigar and Tidigar Server keep plans for an organisation. Use this section when the user
 asks to save, list, open or change a stored plan, or gives a `/p/<code>` link. A link to that plan
 opens the shared plan; a share link opens a separate copy. The code is not the plan's id: list the
 organisation's plans and use the one whose `url` matches the link, ignoring anything after `?` or
@@ -61,6 +61,12 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   `tidigar plans delete <plan-id> --revision <n>` moves it to the trash, where it stays 30 days.
   Exit 5 with `stale_revision`: someone changed it since; get it again and ask again.
   `tidigar plans trash` lists deleted plans and `tidigar plans restore <plan-id>` brings one back.
+- **Comments:** tell the team what was done, decided or found on an activity, as the user:
+  `tidigar comments add <plan-id> <activity-id> note.md` posts the file's Markdown, and
+  `tidigar comments list <plan-id> <activity-id>` reads the thread newest first (`--before <id>`
+  for older ones). Link commits and pull requests; write what a colleague needs, not a log of
+  steps. Exit 7 means the outcome is unknown: list the comments before adding it again. Agents
+  never edit or delete comments.
 - **Screens:** a screen shows one saved view of a stored plan to anyone with its link, on a wall
   screen or a web page, and may play a story written in the
   [story language](https://tidigar.com/agents/docs/stories.md) with the plan's own titles and dates.

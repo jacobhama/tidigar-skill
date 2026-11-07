@@ -1,7 +1,7 @@
 # Work on plans stored in Tidigar
 
 Use this guide when a user asks to save, find, open or change a plan stored in
-Tidigar Business or Tidigar Server, or gives a `/p/<code>` link. A public chat
+Tidigar or Tidigar Server, or gives a `/p/<code>` link. A public chat
 assistant uses remote MCP with delegated OAuth authorization. The user's
 consent grants access; reading this guide or installing the skill does not.
 
@@ -122,6 +122,17 @@ save. Offer a separate copy only if the user wants one.
 - **Restore:** call `tidigar_list_trash`, identify the requested plan, then
   `tidigar_restore_plan` with its `id`.
 
+## Comments
+
+Comment on an activity to tell the team what was done, decided or found:
+`tidigar_add_comment` with the plan `id`, the activity's `id` from the
+project and a Markdown `body`, posted as the user. Link commits and pull
+requests; write what a colleague needs, not a log of steps. Read a thread with
+`tidigar_list_comments`, newest first; pass `next` as `before` for older
+comments. A deleted comment has a null `body`. Agents never edit or delete
+comments. If adding returns `write_unknown`, read the comments before trying
+again.
+
 ## Screens and stories
 
 A screen publishes one saved view to anyone holding its link, without an
@@ -166,3 +177,5 @@ schemas supplied by the server define field types and limits.
 | `tidigar_update_screen` | `id`, `screen`, `name?`, `story?`, `joinCode?` |
 | `tidigar_get_screen_link` | `id`, `screen` |
 | `tidigar_delete_screen` | `id`, `screen` |
+| `tidigar_list_comments` | `id`, `activity`, `before?` |
+| `tidigar_add_comment` | `id`, `activity`, `body` |
