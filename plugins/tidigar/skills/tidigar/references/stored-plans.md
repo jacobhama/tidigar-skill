@@ -122,11 +122,27 @@ save. Offer a separate copy only if the user wants one.
 - **Restore:** call `tidigar_list_trash`, identify the requested plan, then
   `tidigar_restore_plan` with its `id`.
 
+## Activities as tickets
+
+Use `tidigar_list_activities` to find work in one plan, or set `all: true`
+to search accessible plans. Use `tidigar_get_activity` with the activity ID
+or a reference such as `TK-2` to read the description, assignee, latest
+comments and recent history. If a reference is ambiguous, use the ID.
+
+Use `tidigar_add_activity` to create a ticket. Omit dates for backlog work.
+An optional prefix chooses the area for its reference. To change a ticket,
+send only the changed fields and the revision you read to
+`tidigar_update_activity`. Progress is 0, 25, 50, 75 or 100. Set it to 100
+to report completion. If a dependency blocks the update, report the
+predecessor and its required progress. See [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list)
+for the corresponding editor workflow. If the result contains merge
+conflicts, ask the user and resend the request with their choices.
+
 ## Comments
 
 Comment on an activity to tell the team what was done, decided or found:
-`tidigar_add_comment` with the plan `id`, the activity's `id` from the
-project and a Markdown `body`, posted as the user. Link commits and pull
+`tidigar_add_comment` with the plan `id`, the activity's `id` from
+`tidigar_get_activity` or the project and a Markdown `body`, posted as the user. Link commits and pull
 requests; write what a colleague needs, not a log of steps. Read a thread with
 `tidigar_list_comments`, newest first; pass `next` as `before` for older
 comments. A deleted comment has a null `body`. Agents never edit or delete
@@ -179,3 +195,7 @@ schemas supplied by the server define field types and limits.
 | `tidigar_delete_screen` | `id`, `screen` |
 | `tidigar_list_comments` | `id`, `activity`, `before?` |
 | `tidigar_add_comment` | `id`, `activity`, `body` |
+| `tidigar_list_activities` | `id?`, `all?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?` |
+| `tidigar_get_activity` | `id`, `activity` |
+| `tidigar_add_activity` | `id`, `fields`, `prefix?` |
+| `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |

@@ -67,7 +67,8 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
   with `y=2026`, use `12-29`, `2027-12-30` and `2028-01-10` for starts
   in those three years. Then **days**: how many days it lasts, `1` for a
   single day. In a roadmap planned in work days these are work days, skipping weekends and
-  vacation periods.
+  vacation periods. Use `-/-` in place of start and days for an undated
+  activity, as in `a1=Request_quotes/-/-`.
 - Then, in any order:
   - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
     order. When a name belongs to several dimensions, its position selects
@@ -81,8 +82,9 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
   - **Dependencies** after `@`, comma-separated: activities and fixed
     milestones by key, such as `@a1,s2`. The activity starts after each of
     them ends; `@a1:50` lets it start once 50% of `a1`'s planned days have
-    passed (`0`, `25`, `50` or `75`). An activity MUST NOT start before what
-    it depends on allows, and dependencies MUST NOT form a cycle.
+    passed (`0`, `25`, `50` or `75`). Links involving undated activities
+    preserve dependency order without constraining dates or allowing overlap
+    shares. Dependencies MUST NOT form a cycle.
   - **Progress** as `0p`, `25p`, `50p`, `75p` or `100p`. An option whose
     name looks like this is written with its dimension, such as `Size:50p`.
   - `d=` a description.

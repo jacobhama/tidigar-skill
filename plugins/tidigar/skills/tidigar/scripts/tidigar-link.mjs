@@ -232,7 +232,7 @@ const scope = { crypto: globalThis.crypto };
   const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
   // The values a plan's records hold: activity starts and milestone dates.
   const recordTimes = (project) => [
-    ...(project?.items || []).map((item) => item.start),
+    ...(project?.items || []).flatMap((item) => (item.start === undefined ? [] : [item.start])),
     ...(project?.milestones || []).map((point) => point.date),
   ];
   /** Whether a plan holds any local time; `only` when it holds nothing else. */
@@ -608,6 +608,18 @@ const scope = { crypto: globalThis.crypto };
     return Math.min(passed, after);
   }
 
+  function completionBlockers(item, activitiesById) {
+    const blockers = [];
+    for (const id of item.dependsOn || []) {
+      const predecessor = activitiesById.get(id);
+      if (!predecessor) continue;
+      const progress = predecessor.progress ?? 0,
+        required = item.startAfter?.[id] ?? 100;
+      if (progress < required) blockers.push({ id, title: predecessor.title, progress, required });
+    }
+    return blockers;
+  }
+
   // How a record that starts too early after a dependency is told so: by its
   // unit when both hold dates or both local times.
   const afterMessage = (value, end, dependency) =>
@@ -654,13 +666,16 @@ const scope = { crypto: globalThis.crypto };
         if (point) {
           if (item.startAfter?.[dependency] !== undefined)
             invalid(`${path}.${item.id}.startAfter`, `must not name fixed milestone ${dependency}`);
-          if (timeOf(item.start) < startingAt(timeOf(point.date), item.start))
+          if (
+            item.start !== undefined &&
+            timeOf(item.start) < startingAt(timeOf(point.date), item.start)
+          )
             invalid(`${path}.${item.id}.start`, `must not be before fixed milestone ${dependency}`);
           continue;
         }
         const parent = byId.get(dependency);
         if (item.startAfter?.[dependency] !== undefined) {
-          if (isClock(parent.start))
+          if (item.start === undefined || parent.start === undefined || isClock(parent.start))
             invalid(`${path}.${item.id}.startAfter`, 'only day records overlap');
           if (item.start < parent.start)
             invalid(
@@ -669,7 +684,11 @@ const scope = { crypto: globalThis.crypto };
             );
           continue;
         }
-        if (timeOf(item.start) < startingAt(timeAfter(parent.end), item.start))
+        if (
+          item.start !== undefined &&
+          parent.end !== undefined &&
+          timeOf(item.start) < startingAt(timeAfter(parent.end), item.start)
+        )
           invalid(`${path}.${item.id}.start`, afterMessage(item.start, parent.end, dependency));
       }
     }
@@ -692,8 +711,9 @@ const scope = { crypto: globalThis.crypto };
       const progress = source.progress === undefined ? 0 : source.progress;
       if (!PROGRESS_VALUES.has(progress))
         invalid(`${path}.progress`, 'must be one of 0, 25, 50, 75, or 100');
-      const start = scaleValue(source.start, `${path}.start`);
-      const end = scaleValue(source.end, `${path}.end`);
+      const dated = source.start !== undefined || source.end !== undefined;
+      const start = dated ? scaleValue(source.start, `${path}.start`) : undefined;
+      const end = dated ? scaleValue(source.end, `${path}.end`) : undefined;
       if (isClock(start) !== isClock(end))
         invalid(path, 'start and end must both be dates or both local times');
       if (start > end) invalid(path, 'start must not be after end');
@@ -709,8 +729,7 @@ const scope = { crypto: globalThis.crypto };
         title,
         description,
         progress,
-        start,
-        end,
+        ...(dated ? { start, end } : {}),
         values,
         dependsOn,
       };
@@ -800,6 +819,7 @@ const scope = { crypto: globalThis.crypto };
       'end',
       'dependsOn',
       'description',
+      'progress',
       ...dimensions,
     ]);
     return views.map((view, index) => {
@@ -1153,7 +1173,10 @@ const scope = { crypto: globalThis.crypto };
       for (const dependency of milestone.dependsOn) {
         const parent = byId.get(dependency);
         if (!parent) invalid(`milestones[${index}].dependsOn`, `unknown activity ${dependency}`);
-        if (timeOf(milestone.date) < startingAt(timeAfter(parent.end), milestone.date))
+        if (
+          parent.end !== undefined &&
+          timeOf(milestone.date) < startingAt(timeAfter(parent.end), milestone.date)
+        )
           invalid(
             `milestones[${index}].date`,
             afterMessage(milestone.date, parent.end, dependency),
@@ -1470,6 +1493,7 @@ const scope = { crypto: globalThis.crypto };
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
     startThreshold,
+    completionBlockers,
     timeScale,
     isClock,
     holdsLocalTimes,
@@ -1641,7 +1665,10 @@ const scope = { crypto: globalThis.crypto };
           const dependsOn = Array.isArray(item.dependsOn) ? item.dependsOn : [];
           const kept = Object.fromEntries(
             Object.entries(item.startAfter).filter(
-              ([id]) => dependsOn.includes(id) && byId.has(id),
+              ([id]) =>
+                dependsOn.includes(id) &&
+                item.start !== undefined &&
+                byId.get(id)?.start !== undefined,
             ),
           );
           if (Object.keys(kept).length === Object.keys(item.startAfter).length) continue;
@@ -1671,7 +1698,9 @@ const scope = { crypto: globalThis.crypto };
         const start = parse(item.start);
         const end = parse(item.end);
         const parents = Array.isArray(item.dependsOn)
-          ? item.dependsOn.map((id) => earliest(item, id))
+          ? item.dependsOn
+              .filter((id) => fixed.has(id) || byId.get(id)?.start !== undefined)
+              .map((id) => earliest(item, id))
           : [];
         if (
           !Number.isFinite(start) ||
@@ -1696,9 +1725,9 @@ const scope = { crypto: globalThis.crypto };
       for (const point of milestones) {
         if (point.fixed === true || !Array.isArray(point.dependsOn)) continue;
         const date = parse(point.date);
-        const parents = point.dependsOn.map((id) =>
-          model.startingAt(after(byId.get(id)?.end), point.date),
-        );
+        const parents = point.dependsOn
+          .filter((id) => byId.get(id)?.end !== undefined)
+          .map((id) => model.startingAt(after(byId.get(id)?.end), point.date));
         if (!Number.isFinite(date) || !parents.every(Number.isFinite)) continue;
         const minimum = Math.max(...parents, date);
         if (minimum === date || minimum > last(point.date)) continue;
@@ -2104,8 +2133,9 @@ const scope = { crypto: globalThis.crypto };
           if (rawEntry.end !== undefined && rawEntry.length === undefined) entry[2] = rawEntry.end;
         }
         const title = textOf(entry[0], where, 'title', 180);
-        const start = dayOf(entry[1], where, 'start');
-        const length = lengthOf(start, entry[2], where);
+        const undated = entry[1] === null && entry[2] === null;
+        const start = undated ? null : dayOf(entry[1], where, 'start');
+        const length = undated ? null : lengthOf(start, entry[2], where);
         const description = textOf(entry[3], where, 'description', 12000);
         let progress = entry[4] === undefined || entry[4] === null ? 0 : entry[4];
         if (!PROGRESS.includes(progress)) {
@@ -2743,11 +2773,12 @@ const scope = { crypto: globalThis.crypto };
         else if (/^\d+(%|%25)$/.test(field)) progress = Number(field.replace(/%.*/, ''));
         else values = valuesOf(field, where);
       }
-      const first = dayOf(start, where, 'start') ?? 0;
+      const undated = start === '-' && days === '-';
+      const first = undated ? null : (dayOf(start, where, 'start') ?? 0);
       return [
         text(title),
         first,
-        lengthOf(first, daysOf(days, where) ?? 1),
+        undated ? null : lengthOf(first, daysOf(days, where) ?? 1),
         description,
         progress,
         values,
@@ -2943,7 +2974,10 @@ const scope = { crypto: globalThis.crypto };
         ],
         index,
       ) => {
-        const fields = [field(title), date(start), daysOf(start, length)];
+        const fields =
+          start === null && length === null
+            ? [field(title), '-', '-']
+            : [field(title), date(start), daysOf(start, length)];
         const options = values
           .map((choice, position) => {
             if (!choice) return '';
@@ -3062,7 +3096,15 @@ const scope = { crypto: globalThis.crypto };
   ]);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
   // List columns that are no dimension.
-  const LIST_KEYS = new Set(['title', 'duration', 'start', 'end', 'dependsOn', 'description']);
+  const LIST_KEYS = new Set([
+    'title',
+    'duration',
+    'start',
+    'end',
+    'dependsOn',
+    'description',
+    'progress',
+  ]);
 
   class ShareLinkError extends Error {
     constructor(code, message, details = {}) {
@@ -3493,8 +3535,8 @@ const scope = { crypto: globalThis.crypto };
           trimTail(
             [
               item.title,
-              at(item.start),
-              length(item),
+              item.start === undefined ? null : at(item.start),
+              item.start === undefined ? null : length(item),
               item.description,
               item.progress,
               trimZeros(manifest.dimensions.map((dimension) => option(item.values[dimension.id]))),
@@ -3759,8 +3801,9 @@ const scope = { crypto: globalThis.crypto };
             title,
             description,
             progress,
-            start: time(start),
-            end: until(start, length),
+            ...(start === null && length === null
+              ? {}
+              : { start: time(start), end: until(start, length) }),
             values: Object.fromEntries(
               choices
                 .map((choice, position) => [
@@ -3909,9 +3952,15 @@ const scope = { crypto: globalThis.crypto };
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
                 (column) =>
-                  ['title', 'duration', 'start', 'end', 'dependsOn', 'description'].includes(
-                    column,
-                  ) || dimensionIds.has(column),
+                  [
+                    'title',
+                    'duration',
+                    'start',
+                    'end',
+                    'dependsOn',
+                    'description',
+                    'progress',
+                  ].includes(column) || dimensionIds.has(column),
               );
           if (
             record.listSort &&
@@ -3969,8 +4018,9 @@ const scope = { crypto: globalThis.crypto };
       for (const key of COLUMN_FIELDS)
         view[key] = view[key].filter(
           (column) =>
-            ['title', 'duration', 'start', 'end', 'dependsOn', 'description'].includes(column) ||
-            known.has(column),
+            ['title', 'duration', 'start', 'end', 'dependsOn', 'description', 'progress'].includes(
+              column,
+            ) || known.has(column),
         );
       if (view.listSort && !LIST_KEYS.has(view.listSort) && !known.has(view.listSort))
         view.listSort = '';
