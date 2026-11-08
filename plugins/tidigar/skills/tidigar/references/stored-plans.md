@@ -138,6 +138,12 @@ predecessor and its required progress. See [Report completion in List](https://t
 for the corresponding editor workflow. If the result contains merge
 conflicts, ask the user and resend the request with their choices.
 
+Use `tidigar_claim_activity` to assign a ticket to the member whose grant
+or token you use. If it returns `activity_claimed`, report who holds it and
+set `takeOver: true` only when the user explicitly asks you to take over.
+Use `tidigar_assign_activity` with the account ID of a member who may edit
+the plan, or an empty `assignee` to clear the assignment.
+
 ## Comments
 
 Comment on an activity to tell the team what was done, decided or found:
@@ -199,3 +205,5 @@ schemas supplied by the server define field types and limits.
 | `tidigar_get_activity` | `id`, `activity` |
 | `tidigar_add_activity` | `id`, `fields`, `prefix?` |
 | `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |
+| `tidigar_assign_activity` | `id`, `activity`, `assignee` |
+| `tidigar_claim_activity` | `id`, `activity`, `takeOver?` |
