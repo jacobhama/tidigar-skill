@@ -65,7 +65,8 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
 - Titles are at most 180 characters; milestones and periods need one.
 - `periods`: `{ "title", "start", "end", "vacation" }`, and `color` in a stored plan.
 - `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and
-  `columns` take a dimension's name; `start` and `end` set the timeline's range. `layout` is
+  `columns` take dimension names. Except for `groupBy`, they also take `"@progress"`.
+  `start` and `end` set the timeline range. `layout` is
   `"classic"`, one activity per row under a label column as in MS Project, or `"compact"`,
   activities sharing rows; `style` is `"minimal"`, `"airy"`, `"contrast"` or `"terminal"`. Left out,
   the link opens a timeline over the plan's dates, grouped and colored by the first dimension, and

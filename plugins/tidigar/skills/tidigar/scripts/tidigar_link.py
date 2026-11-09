@@ -304,6 +304,8 @@ def to_payload(plan):
             o[field] = value
         elif value is None or value == "":
             o[field] = ""
+        elif field in ("row", "col", "color") and value == "@progress":
+            o[field] = "progress"
         elif value not in dims:
             fail(f"view.{key}", f"there is no dimension {q(value)}")
         else:
@@ -409,7 +411,12 @@ def link(payload):
         parts = [MODES[o.get("view", "grid")]]
         parts += [word for word, rows in LAYOUTS.items() if o.get("timelineActivityRows") == rows]
         parts += [o["presentationStyle"]] if o.get("presentationStyle", "standard") != "standard" else []
-        parts += [f"{axis}:{name(dims[o[f]][0])}" for axis, f in AXES.items() if isinstance(o.get(f), int)]
+        for axis, f in AXES.items():
+            if o.get(f) == "progress":
+                parts.append(f"{axis}:{'@' if f == 'color' else ''}progress")
+            elif isinstance(o.get(f), int):
+                dimension = name(dims[o[f]][0])
+                parts.append(f"{axis}:{'%70rogress' if dimension == 'progress' and f in ('row', 'col') else dimension}")
         for edge, f in (("start", "timelineStart"), ("end", "timelineEnd")):
             if o.get(f):
                 parts.append(f"{edge}:{date(datetime.date.fromisoformat(o[f]).toordinal() - base)}")
@@ -557,6 +564,8 @@ def payload_of(url):
                 o["timelineActivityRows"] = LAYOUTS[setting]
             elif setting in STYLES:
                 o["presentationStyle"] = setting
+            elif (axis == "color" and value == "@progress") or (axis in ("rows", "columns") and value == "progress"):
+                o[AXES[axis]] = "progress"
             elif axis in AXES and text(value) in names:
                 o[AXES[axis]] = names.index(text(value))
             elif axis in ("start", "end"):
@@ -619,8 +628,12 @@ def read(url):
             elif key == "style":
                 if value != "standard":
                     view["style"] = value
+            elif value == "progress":
+                view[key] = "@progress"
+            elif key in ("type", "start", "end"):
+                view[key] = value
             else:
-                view[key] = value if key in ("type", "start", "end") else (dims[value][0] if value != "" else None)
+                view[key] = dims[value][0] if value != "" else None
     if view:
         view.setdefault("type", "grid")
         plan["view"] = view

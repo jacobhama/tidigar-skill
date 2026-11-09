@@ -830,9 +830,10 @@ const scope = { crypto: globalThis.crypto };
       const name = stringValue(source.name, `${path}.name`, 100, true);
       const mode = source.view === undefined ? 'grid' : source.view;
       if (!VIEWS.has(mode)) invalid(`${path}.view`, 'must be grid, timeline, list, or flow');
-      const row = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
+      const rowAxis = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
       const col = normalizeAxisReference(source.col, dimensions, `${path}.col`, true);
-      const color = normalizeDimensionReference(source.color, dimensions, `${path}.color`);
+      const row = rowAxis === col ? '' : rowAxis;
+      const color = normalizeAxisReference(source.color, dimensions, `${path}.color`, true);
       const flowGroup = normalizeDimensionReference(
         source.flowGroup,
         dimensions,
@@ -1609,8 +1610,8 @@ const scope = { crypto: globalThis.crypto };
               typeof view[field] === 'string' &&
               view[field] &&
               !options.has(view[field]) &&
-              !(view[field] === 'assignee' && ['row', 'col', 'group'].includes(field)) &&
-              !(view[field] === 'progress' && ['row', 'col'].includes(field))
+              !(view[field] === 'assignee' && ['row', 'col', 'group', 'color'].includes(field)) &&
+              !(view[field] === 'progress' && ['row', 'col', 'color'].includes(field))
             ) {
               view[field] = '';
               mark('sharedViews', view.id, field);
@@ -2316,7 +2317,7 @@ const scope = { crypto: globalThis.crypto };
             value === undefined ||
             value === '' ||
             Number.isInteger(value) ||
-            (value === 'progress' && ['row', 'col'].includes(field))
+            (value === 'progress' && ['row', 'col', 'color'].includes(field))
           )
             continue;
           const index = dimensions.findIndex(([name]) => sameText(name, String(value)));
@@ -2841,7 +2842,11 @@ const scope = { crypto: globalThis.crypto };
             'v',
             `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, start or end`,
           );
-        else if (['row', 'col'].includes(field) && name === 'progress') view[field] = 'progress';
+        else if (
+          (field === 'color' && name === '@progress') ||
+          (['row', 'col'].includes(field) && name === 'progress')
+        )
+          view[field] = 'progress';
         else if (index < 0)
           note('v', `${axis}: no dimension is called ${JSON.stringify(text(name))}`);
         else view[field] = index;
@@ -3026,8 +3031,16 @@ const scope = { crypto: globalThis.crypto };
       );
       if (layout) settings.push(layout);
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
-      for (const [axis, key] of Object.entries(VIEW_AXES))
-        if (Number.isInteger(view[key])) settings.push(`${axis}:${name(dimensions[view[key]][0])}`);
+      for (const [axis, key] of Object.entries(VIEW_AXES)) {
+        if (view[key] === 'progress')
+          settings.push(`${axis}:${key === 'color' ? '@' : ''}progress`);
+        else if (Number.isInteger(view[key])) {
+          const dimension = name(dimensions[view[key]][0]);
+          settings.push(
+            `${axis}:${dimension === 'progress' && key !== 'color' ? '%70rogress' : dimension}`,
+          );
+        }
+      }
       const offset = (iso) => Date.parse(`${iso}T00:00:00Z`) / DAY - base;
       if (view.timelineStart) settings.push(`start:${date(offset(view.timelineStart))}`);
       if (view.timelineEnd) settings.push(`end:${date(offset(view.timelineEnd))}`);
@@ -4695,7 +4708,11 @@ const scope = { crypto: globalThis.crypto };
     for (const [key, field] of Object.entries(VIEW_FIELDS)) {
       if (view[key] === undefined) continue;
       const path = `view.${key}`;
-      if (DIMENSION_VIEW_KEYS.has(key)) o[field] = dimensionIndex(view[key], path);
+      if (DIMENSION_VIEW_KEYS.has(key))
+        o[field] =
+          key !== 'groupBy' && view[key] === '@progress'
+            ? 'progress'
+            : dimensionIndex(view[key], path);
       else if (key === 'type') {
         if (!VIEW_TYPES.includes(view.type)) fail(path, `must be ${VIEW_TYPES.join(', ')}`);
         o.view = view.type;
@@ -4804,7 +4821,9 @@ const scope = { crypto: globalThis.crypto };
       for (const [key, field] of Object.entries(VIEW_FIELDS)) {
         const value = payload.o[field];
         if (value === undefined) continue;
-        if (DIMENSION_VIEW_KEYS.has(key)) view[key] = value === '' ? null : dimensions[value].name;
+        if (DIMENSION_VIEW_KEYS.has(key))
+          view[key] =
+            value === 'progress' ? '@progress' : value === '' ? null : dimensions[value].name;
         else if (key === 'layout') {
           const layout = Object.keys(LAYOUTS).find((name) => LAYOUTS[name] === value);
           if (layout) view.layout = layout;

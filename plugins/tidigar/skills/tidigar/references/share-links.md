@@ -105,18 +105,18 @@ p1=Autumn_break/10-26/5
 
 ### Dimensions and the view
 
-- `m1=Team:Household,Installer` names a dimension and its options in order.
-  A link has no colors: options take Tidigar's standard colors in order.
-- `v=` selects `timeline`, `board`, `list` or `flow`. `rows:`, `columns:`,
-  `color:` and `group:` take a dimension name; `start:`/`end:` take dates:
-  `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
+- `m1=Team:Household,Installer` defines ordered options with standard colors.
+- `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names
+  and dates as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
+  Board grouping uses `rows:` and `columns:`.
 - Words set how a timeline looks: `classic` shows one activity per row under
   a fixed label column with reference keys, as in MS Project, and opens the
   roadmap in its Classic view; `compact` lets activities share rows; `minimal`,
   `airy`, `contrast` and `terminal` choose a style. A word alone means a
   timeline: `v=classic`.
 
-`row`/`col` accept `"progress"`: `v=board/columns:progress`.
+Use `v=board/columns:progress/color:@progress` to group and color by
+completion. Rows also accept `progress`. Links omit assignee settings.
 
 ### Text
 
