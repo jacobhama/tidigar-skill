@@ -228,6 +228,32 @@ const scope = { crypto: globalThis.crypto };
   const timeOf = (value) => timeScale(value).parse(value);
   /** The first moment after a record's end, in that record's unit. */
   const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
+  const followUpClocks = new Map();
+  /** Derived from the plan's wall clock, with no stored status to go stale. */
+  function followUpStatus(item, { now = Date.now(), timeZone } = {}) {
+    if (Number(item.progress) === 100) return 'done';
+    if (!item.end) return 'undated';
+    let clock = followUpClocks.get(timeZone);
+    if (!clock) {
+      clock = new Intl.DateTimeFormat('en-GB', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      });
+      followUpClocks.set(timeZone, clock);
+    }
+    const parts = Object.fromEntries(
+      clock.formatToParts(now).map(({ type, value }) => [type, value]),
+    );
+    const today = `${parts.year}-${parts.month}-${parts.day}`;
+    const localMinute = `${today}T${parts.hour}:${parts.minute}`;
+    if (timeOf(localMinute) >= timeAfter(item.end)) return 'overdue';
+    return item.end.slice(0, 10) === today ? 'today' : 'upcoming';
+  }
   /** The first moment at or after `time` where a record shaped like `like`
    * may start: a day record starts only at midnight. */
   const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
@@ -1515,6 +1541,7 @@ const scope = { crypto: globalThis.crypto };
     nightMinutes,
     timeOf,
     timeAfter,
+    followUpStatus,
     startingAt,
     valueAt,
     maxRefLength: MAX_REF_LENGTH,
