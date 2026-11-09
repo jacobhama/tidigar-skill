@@ -124,34 +124,28 @@ save. Offer a separate copy only if the user wants one.
 
 ## Activities as tickets
 
-Start a plan from the [Agent work template](https://tidigar.com/examples/agent-work).
-Its Board groups by activity progress (0, 25, 50, 75 and 100 percent). The
-Backlog List includes undated work. Shared assignments and comments use a plan
-stored in Tidigar Business or Tidigar Server.
+The [Agent work template](https://tidigar.com/examples/agent-work) includes a
+Board by progress and a List with undated backlog work. Shared assignments and
+comments require Tidigar Business or Server.
 
-1. Use `tidigar_list_activities` with the plan ID and the ticket's `ref`. To
-   find unassigned, unscheduled backlog candidates, use `assignee: ""`,
-   `dated: false` and `progress: 0`. Use `all: true` only when searching
-   across accessible plans. Read the selected ticket with
-   `tidigar_get_activity`. Check its description, dependencies, assignee,
-   comments and revision. If a reference is ambiguous, use the activity ID.
-2. Use `tidigar_claim_activity` to assign it to the member whose grant or
-   token you use. If it returns `activity_claimed`, report who holds it and
-   set `takeOver: true` only when the user explicitly asks you to take over.
-3. Report progress with `tidigar_update_activity`. Send only the changed
-   fields and use the revision you read. Use 25, 50 or 75 as work advances.
-   On merge conflicts, ask the user and resend the request with their choices.
-4. Use `tidigar_add_comment` with the plan ID and the activity ID to record
-   what changed, how it was verified and the commit or pull request link.
-5. When the work is done, use `tidigar_update_activity` to set progress to
-   100. If completion is blocked, report the predecessor and its required
-   progress. Leave it open until the dependency is satisfied.
+1. Resume assigned work with `tidigar_list_my_activities`. Find a known ticket
+   with `tidigar_list_activities` and its plan ID and `ref`. For unassigned
+   backlog use `assignee: ""`, `dated: false` and `progress: 0`. Use `all: true`
+   for a cross-plan search. Read the ticket with `tidigar_get_activity`.
+   If a reference is ambiguous, use the activity ID.
+2. Claim with `tidigar_claim_activity`. On `activity_claimed`, report who
+   holds it. Set `takeOver: true` only at the user's request.
+3. Use `tidigar_update_activity` with the revision read and changed fields.
+   Report 25, 50 or 75 as work advances. Ask the user about merge conflicts.
+4. Comment with `tidigar_add_comment`. Record the result, verification and
+   relevant commit or pull request.
+5. Set progress to 100 when done. If blocked, report the predecessor and
+   required progress and leave the ticket open.
    [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list).
 
-Use `tidigar_add_activity` to create a ticket. Omit dates for backlog work.
-An optional prefix chooses the area for its reference. Use
-`tidigar_assign_activity` with the account ID of a member who may edit the
-plan, or an empty `assignee` to clear the assignment.
+Create a ticket with `tidigar_add_activity`. Omit dates for backlog work.
+An optional prefix selects its reference area. Use `tidigar_assign_activity`
+with an editor's account ID or an empty assignee to clear it.
 
 ## Comments
 
@@ -207,6 +201,7 @@ schemas supplied by the server define field types and limits.
 | `tidigar_delete_screen` | `id`, `screen` |
 | `tidigar_list_comments` | `id`, `activity`, `before?` |
 | `tidigar_add_comment` | `id`, `activity`, `body` |
+| `tidigar_list_my_activities` | none |
 | `tidigar_list_activities` | `id?`, `all?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?` |
 | `tidigar_get_activity` | `id`, `activity` |
 | `tidigar_add_activity` | `id`, `fields`, `prefix?` |
