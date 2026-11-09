@@ -124,36 +124,42 @@ save. Offer a separate copy only if the user wants one.
 
 ## Activities as tickets
 
-Use `tidigar_list_activities` to find work in one plan, or set `all: true`
-to search accessible plans. Use `tidigar_get_activity` with the activity ID
-or a reference such as `TK-2` to read the description, assignee, latest
-comments and recent history. If a reference is ambiguous, use the ID.
+Start a plan from the [Agent work template](https://tidigar.com/examples/agent-work).
+Its Board groups by activity progress (0, 25, 50, 75 and 100 percent). The
+Backlog List includes undated work. Shared assignments and comments use a plan
+stored in Tidigar Business or Tidigar Server.
+
+1. Use `tidigar_list_activities` with the plan ID and the ticket's `ref`. To
+   find unassigned, unscheduled backlog candidates, use `assignee: ""`,
+   `dated: false` and `progress: 0`. Use `all: true` only when searching
+   across accessible plans. Read the selected ticket with
+   `tidigar_get_activity`. Check its description, dependencies, assignee,
+   comments and revision. If a reference is ambiguous, use the activity ID.
+2. Use `tidigar_claim_activity` to assign it to the member whose grant or
+   token you use. If it returns `activity_claimed`, report who holds it and
+   set `takeOver: true` only when the user explicitly asks you to take over.
+3. Report progress with `tidigar_update_activity`. Send only the changed
+   fields and use the revision you read. Use 25, 50 or 75 as work advances.
+   On merge conflicts, ask the user and resend the request with their choices.
+4. Use `tidigar_add_comment` with the plan ID and the activity ID to record
+   what changed, how it was verified and the commit or pull request link.
+5. When the work is done, use `tidigar_update_activity` to set progress to
+   100. If completion is blocked, report the predecessor and its required
+   progress. Leave it open until the dependency is satisfied.
+   [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list).
 
 Use `tidigar_add_activity` to create a ticket. Omit dates for backlog work.
-An optional prefix chooses the area for its reference. To change a ticket,
-send only the changed fields and the revision you read to
-`tidigar_update_activity`. Progress is 0, 25, 50, 75 or 100. Set it to 100
-to report completion. If a dependency blocks the update, report the
-predecessor and its required progress. See [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list)
-for the corresponding editor workflow. If the result contains merge
-conflicts, ask the user and resend the request with their choices.
-
-Use `tidigar_claim_activity` to assign a ticket to the member whose grant
-or token you use. If it returns `activity_claimed`, report who holds it and
-set `takeOver: true` only when the user explicitly asks you to take over.
-Use `tidigar_assign_activity` with the account ID of a member who may edit
-the plan, or an empty `assignee` to clear the assignment.
+An optional prefix chooses the area for its reference. Use
+`tidigar_assign_activity` with the account ID of a member who may edit the
+plan, or an empty `assignee` to clear the assignment.
 
 ## Comments
 
-Comment on an activity to tell the team what was done, decided or found:
-`tidigar_add_comment` with the plan `id`, the activity's `id` from
-`tidigar_get_activity` or the project and a Markdown `body`, posted as the user. Link commits and pull
-requests; write what a colleague needs, not a log of steps. Read a thread with
-`tidigar_list_comments`, newest first; pass `next` as `before` for older
-comments. A deleted comment has a null `body`. Agents never edit or delete
-comments. If adding returns `write_unknown`, read the comments before trying
-again.
+Post as the user with `tidigar_add_comment`. Use the plan `id`, the activity
+ID and a Markdown `body`. Read threads newest first with `tidigar_list_comments`.
+Pass `next` as `before` for older comments. Deleted comments have a null
+`body`. Agents never edit or delete comments. If adding returns
+`write_unknown`, read the thread before retrying.
 
 ## Screens and stories
 

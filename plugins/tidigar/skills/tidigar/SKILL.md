@@ -22,6 +22,12 @@ Create links directly with the guide below; no scripts are required. For optiona
   at `https://app.tidigar.com/mcp`; the linked guide covers connecting when
   tools are missing. Return the stored plan's `url`, not a separate copy.
 
+- **Work a ticket in a stored plan:** find it with `tidigar_list_activities`,
+  read it with `tidigar_get_activity`, then use `tidigar_claim_activity`.
+  Report progress with `tidigar_update_activity` and leave the result, checks
+  and commit link in `tidigar_add_comment`. Set progress to 100 when done and
+  dependencies permit it. [Ticket workflow](https://tidigar.com/agents/stored-plans.md#activities-as-tickets).
+
 ## Create a share link
 
 Write a clickable Tidigar link directly using the text format below. Writing
