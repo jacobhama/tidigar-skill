@@ -72,6 +72,7 @@ const scope = { crypto: globalThis.crypto };
   // it never names a dimension.
   const ASSIGNEE_AXIS = 'assignee';
   const PROGRESS_AXIS = 'progress';
+  const FOLLOW_UP_COLOR = 'follow-up-status';
   // Values renamed when their default changed. Reading one gives the new
   // default, so stored views, calendars and links take up the new look once;
   // a choice made afterwards uses the new name and stays.
@@ -620,6 +621,14 @@ const scope = { crypto: globalThis.crypto };
     return blockers;
   }
 
+  // A merged candidate can supply new dependencies while completion still
+  // starts from the progress stored at the latest revision.
+  function completionDecision(item, activitiesById, currentProgress = item.progress ?? 0) {
+    if (currentProgress === 100) return { status: 'already-complete' };
+    const blockers = completionBlockers(item, activitiesById);
+    return blockers.length ? { status: 'blocked', blockers } : { status: 'eligible' };
+  }
+
   // How a record that starts too early after a dependency is told so: by its
   // unit when both hold dates or both local times.
   const afterMessage = (value, end, dependency) =>
@@ -833,7 +842,10 @@ const scope = { crypto: globalThis.crypto };
       const rowAxis = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
       const col = normalizeAxisReference(source.col, dimensions, `${path}.col`, true);
       const row = rowAxis === col ? '' : rowAxis;
-      const color = normalizeAxisReference(source.color, dimensions, `${path}.color`, true);
+      const color =
+        source.color === FOLLOW_UP_COLOR
+          ? FOLLOW_UP_COLOR
+          : normalizeAxisReference(source.color, dimensions, `${path}.color`, true);
       const flowGroup = normalizeDimensionReference(
         source.flowGroup,
         dimensions,
@@ -1490,11 +1502,13 @@ const scope = { crypto: globalThis.crypto };
     maxViews: MAX_VIEWS,
     assigneeAxis: ASSIGNEE_AXIS,
     progressAxis: PROGRESS_AXIS,
+    followUpColor: FOLLOW_UP_COLOR,
     enumValues: ENUM_VALUES,
     renamedViewValues: RENAMED_VIEW_VALUES,
     workCalendar,
     startThreshold,
     completionBlockers,
+    completionDecision,
     timeScale,
     isClock,
     holdsLocalTimes,
@@ -1611,7 +1625,8 @@ const scope = { crypto: globalThis.crypto };
               view[field] &&
               !options.has(view[field]) &&
               !(view[field] === 'assignee' && ['row', 'col', 'group', 'color'].includes(field)) &&
-              !(view[field] === 'progress' && ['row', 'col', 'color'].includes(field))
+              !(view[field] === 'progress' && ['row', 'col', 'color'].includes(field)) &&
+              !(field === 'color' && view.color === 'follow-up-status')
             ) {
               view[field] = '';
               mark('sharedViews', view.id, field);
@@ -2317,7 +2332,8 @@ const scope = { crypto: globalThis.crypto };
             value === undefined ||
             value === '' ||
             Number.isInteger(value) ||
-            (value === 'progress' && ['row', 'col', 'color'].includes(field))
+            (value === 'progress' && ['row', 'col', 'color'].includes(field)) ||
+            (field === 'color' && value === 'follow-up-status')
           )
             continue;
           const index = dimensions.findIndex(([name]) => sameText(name, String(value)));
@@ -2842,6 +2858,8 @@ const scope = { crypto: globalThis.crypto };
             'v',
             `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, start or end`,
           );
+        else if (field === 'color' && name === '@follow-up-status')
+          view[field] = 'follow-up-status';
         else if (
           (field === 'color' && name === '@progress') ||
           (['row', 'col'].includes(field) && name === 'progress')
@@ -3032,7 +3050,9 @@ const scope = { crypto: globalThis.crypto };
       if (layout) settings.push(layout);
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
       for (const [axis, key] of Object.entries(VIEW_AXES)) {
-        if (view[key] === 'progress')
+        if (key === 'color' && view[key] === 'follow-up-status')
+          settings.push('color:@follow-up-status');
+        else if (view[key] === 'progress')
           settings.push(`${axis}:${key === 'color' ? '@' : ''}progress`);
         else if (Number.isInteger(view[key])) {
           const dimension = name(dimensions[view[key]][0]);
@@ -3468,6 +3488,9 @@ const scope = { crypto: globalThis.crypto };
      and reports each correction. Encoders stay strict. */
   function createFactory({ model, repairDates = null, lenient = null, readable = null }) {
     /* Pack a normalized project into plain JSON values without IDs. */
+    const builtInColorOrAxis = (key, value) =>
+      value === model.progressAxis || (key === 'color' && value === model.followUpColor);
+
     function pack(projectInput, initialView) {
       const project = model.normalizeProject(projectInput);
       const { manifest } = project;
@@ -3508,8 +3531,11 @@ const scope = { crypto: globalThis.crypto };
           const value = DIMENSION_FIELDS.has(key) && stored === model.assigneeAxis ? '' : stored;
           if (JSON.stringify(value) === JSON.stringify(defaults[key])) continue;
           if (DIMENSION_FIELDS.has(key))
-            packed[key] =
-              value === model.progressAxis ? value : value ? dimensionIndex.get(value) : '';
+            packed[key] = builtInColorOrAxis(key, value)
+              ? value
+              : value
+                ? dimensionIndex.get(value)
+                : '';
           else if (COLUMN_FIELDS.has(key))
             packed[key] = value.map((column) =>
               dimensionIndex.has(column) ? dimensionIndex.get(column) : column,
@@ -3743,8 +3769,11 @@ const scope = { crypto: globalThis.crypto };
         const view = {};
         for (const [key, value] of Object.entries(packed)) {
           if (DIMENSION_FIELDS.has(key))
-            view[key] =
-              value === model.progressAxis ? value : value === '' ? '' : at(dimensions, value).id;
+            view[key] = builtInColorOrAxis(key, value)
+              ? value
+              : value === ''
+                ? ''
+                : at(dimensions, value).id;
           else if (COLUMN_FIELDS.has(key))
             view[key] = list(value).map((column) =>
               typeof column === 'number' ? at(dimensions, column).id : column,
@@ -3959,7 +3988,11 @@ const scope = { crypto: globalThis.crypto };
         const prune = (record) => {
           if (!record) return record;
           for (const key of DIMENSION_FIELDS)
-            if (record[key] && record[key] !== model.progressAxis && !dimensionIds.has(record[key]))
+            if (
+              record[key] &&
+              !builtInColorOrAxis(key, record[key]) &&
+              !dimensionIds.has(record[key])
+            )
               record[key] = '';
           for (const key of COLUMN_FIELDS)
             if (Array.isArray(record[key]))
@@ -4708,7 +4741,8 @@ const scope = { crypto: globalThis.crypto };
     for (const [key, field] of Object.entries(VIEW_FIELDS)) {
       if (view[key] === undefined) continue;
       const path = `view.${key}`;
-      if (DIMENSION_VIEW_KEYS.has(key))
+      if (key === 'colorBy' && view[key] === '@follow-up-status') o[field] = 'follow-up-status';
+      else if (DIMENSION_VIEW_KEYS.has(key))
         o[field] =
           key !== 'groupBy' && view[key] === '@progress'
             ? 'progress'
@@ -4821,7 +4855,8 @@ const scope = { crypto: globalThis.crypto };
       for (const [key, field] of Object.entries(VIEW_FIELDS)) {
         const value = payload.o[field];
         if (value === undefined) continue;
-        if (DIMENSION_VIEW_KEYS.has(key))
+        if (field === 'color' && value === 'follow-up-status') view[key] = '@follow-up-status';
+        else if (DIMENSION_VIEW_KEYS.has(key))
           view[key] =
             value === 'progress' ? '@progress' : value === '' ? null : dimensions[value].name;
         else if (key === 'layout') {

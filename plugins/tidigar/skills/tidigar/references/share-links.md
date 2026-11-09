@@ -115,8 +115,8 @@ p1=Autumn_break/10-26/5
   `airy`, `contrast` and `terminal` choose a style. A word alone means a
   timeline: `v=classic`.
 
-Use `v=board/columns:progress/color:@progress` to group and color by
-completion. Rows also accept `progress`. Links omit assignee settings.
+Use `progress` for rows or columns and `@progress` or `@follow-up-status`
+for color. Links omit assignee settings.
 
 ### Text
 

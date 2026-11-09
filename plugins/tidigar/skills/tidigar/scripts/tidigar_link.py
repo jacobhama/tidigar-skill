@@ -304,6 +304,8 @@ def to_payload(plan):
             o[field] = value
         elif value is None or value == "":
             o[field] = ""
+        elif field == "color" and value == "@follow-up-status":
+            o[field] = "follow-up-status"
         elif field in ("row", "col", "color") and value == "@progress":
             o[field] = "progress"
         elif value not in dims:
@@ -412,7 +414,9 @@ def link(payload):
         parts += [word for word, rows in LAYOUTS.items() if o.get("timelineActivityRows") == rows]
         parts += [o["presentationStyle"]] if o.get("presentationStyle", "standard") != "standard" else []
         for axis, f in AXES.items():
-            if o.get(f) == "progress":
+            if f == "color" and o.get(f) == "follow-up-status":
+                parts.append("color:@follow-up-status")
+            elif o.get(f) == "progress":
                 parts.append(f"{axis}:{'@' if f == 'color' else ''}progress")
             elif isinstance(o.get(f), int):
                 dimension = name(dims[o[f]][0])
@@ -564,6 +568,8 @@ def payload_of(url):
                 o["timelineActivityRows"] = LAYOUTS[setting]
             elif setting in STYLES:
                 o["presentationStyle"] = setting
+            elif axis == "color" and value == "@follow-up-status":
+                o["color"] = "follow-up-status"
             elif (axis == "color" and value == "@progress") or (axis in ("rows", "columns") and value == "progress"):
                 o[AXES[axis]] = "progress"
             elif axis in AXES and text(value) in names:
@@ -628,8 +634,8 @@ def read(url):
             elif key == "style":
                 if value != "standard":
                     view["style"] = value
-            elif value == "progress":
-                view[key] = "@progress"
+            elif value == "progress" or (key == "colorBy" and value == "follow-up-status"):
+                view[key] = "@" + value
             elif key in ("type", "start", "end"):
                 view[key] = value
             else:
