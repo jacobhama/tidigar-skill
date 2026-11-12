@@ -758,6 +758,7 @@ const scope = { crypto: globalThis.crypto };
       const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
       const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
       const ref = refValue(source.ref, `${path}.ref`);
+      const assignee = assigneeValue(source.assignee, `${path}.assignee`);
       const record = {
         id,
         projectId,
@@ -771,6 +772,7 @@ const scope = { crypto: globalThis.crypto };
       // Only an activity that overlaps another carries the field.
       if (Object.keys(startAfter).length) record.startAfter = startAfter;
       if (ref) record.ref = ref;
+      if (assignee) record.assignee = assignee;
       return record;
     });
     // A whole project checks dependencies once its milestones are known.
@@ -950,8 +952,8 @@ const scope = { crypto: globalThis.crypto };
         Object.assign(frame, { timelineFrameStart: frameStart, timelineFrameEnd: frameEnd });
       }
       const listFallback = ['title', 'start', 'end', ...dimensions];
-      // The column a List sorts by, or "" for flow order. A column that no
-      // longer exists sorts in flow order, as unknown columns are dropped.
+      // The column a List sorts by, or "" for Start. A column that no
+      // longer exists sorts by Start, as unknown columns are dropped.
       const listSort = source.listSort === undefined ? '' : source.listSort;
       if (typeof listSort !== 'string') invalid(`${path}.listSort`, 'expected a column key');
       return {
@@ -1069,6 +1071,29 @@ const scope = { crypto: globalThis.crypto };
   // one is left out of the record.
   function refValue(value, path) {
     return value === undefined ? '' : stringValue(value, path, MAX_REF_LENGTH, false);
+  }
+
+  /*
+   * An activity's assignee: the positive member number the plan's
+   * organisation gave an account. It means nothing outside that
+   * organisation; an unassigned activity leaves the field out.
+   */
+  function validAssignee(value) {
+    return Number.isSafeInteger(value) && value > 0;
+  }
+
+  function assigneeValue(value, path) {
+    if (value === undefined) return 0;
+    if (!validAssignee(value)) invalid(path, 'must be a positive integer');
+    return value;
+  }
+
+  /* `value` normalized with every assignee left out, for a copy whose
+     member numbers would mean nothing where it goes. */
+  function withoutAssignees(value) {
+    const project = normalizeProject(value);
+    for (const item of project.items) delete item.assignee;
+    return project;
   }
 
   /*
@@ -1527,6 +1552,8 @@ const scope = { crypto: globalThis.crypto };
     uuid,
     maxViews: MAX_VIEWS,
     assigneeAxis: ASSIGNEE_AXIS,
+    validAssignee,
+    withoutAssignees,
     progressAxis: PROGRESS_AXIS,
     followUpColor: FOLLOW_UP_COLOR,
     enumValues: ENUM_VALUES,

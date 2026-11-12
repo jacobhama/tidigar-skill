@@ -63,7 +63,8 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   `tidigar plans trash` lists deleted plans and `tidigar plans restore <plan-id>` brings one back.
 - **Assigned work:** run `tidigar activities mine` to find open tickets assigned
   to the token member across readable plans in their organisation. Use the plan
-  ID and activity ID from the result to inspect an individual ticket.
+  ID and activity ID from the result to inspect an individual ticket. In a project, an activity's
+  `assignee` is the organisation's member number for a person, not an account: keep it as read.
 - **Comments:** tell the team what was done, decided or found on an activity, as the user:
   `tidigar comments add <plan-id> <activity-id> note.md` posts the file's Markdown, and
   `tidigar comments list <plan-id> <activity-id>` reads the thread newest first (`--before <id>`

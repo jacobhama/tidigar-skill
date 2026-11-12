@@ -60,6 +60,8 @@ save. Offer a separate copy only if the user wants one.
    UUIDs. Use the [roadmap file format](https://tidigar.com/agents/docs/file-format.md)
    for the fields you edit. Never rebuild an existing project from simplified
    plan JSON or a share link: that would lose its identities and views.
+   An activity's `assignee` is the organisation's member number for a person,
+   not an account: keep it as read and assign with `tidigar_assign_activity`.
 
 ## Validate and save the change
 
