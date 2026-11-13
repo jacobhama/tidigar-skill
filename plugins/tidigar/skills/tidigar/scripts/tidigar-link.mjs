@@ -33,8 +33,11 @@ const scope = { crypto: globalThis.crypto };
  *       projectId, formatVersion, name, description, dimensions, year,
  *       timeZone, nightHours
  *     },
- *     items, sharedViews, milestones, periodIndicators
+ *     items, sharedViews
  *   }
+ *
+ * `items` holds every record of the plan: activities, milestones and
+ * periods, told apart by `type` (left out for an activity).
  *
  * Normalization is intentionally a whitelist operation.  It creates a deep
  * canonical copy and drops fields that are not part of the storage contract.
@@ -104,6 +107,7 @@ const scope = { crypto: globalThis.crypto };
   // Allowed values of enumerated fields, published read-only so the model
   // specification test can compare them with docs/model-spec.md.
   const ENUM_VALUES = Object.freeze({
+    'item.type': Object.freeze(['activity', 'milestone', 'period']),
     'item.progress': Object.freeze([...PROGRESS_VALUES]),
     'manifest.schedule': Object.freeze([...SCHEDULES]),
     'view.view': Object.freeze([...VIEWS]),
@@ -128,8 +132,9 @@ const scope = { crypto: globalThis.crypto };
   const MAX_DIMENSIONS = 20;
   const MAX_OPTIONS = 100;
   const MAX_ITEMS = 10000;
-  const MAX_MILESTONES = 1000;
-  const MAX_PERIOD_INDICATORS = 1000;
+  // The project format this model reads and writes. Earlier versions are
+  // not read: their milestones and periods were separate collections.
+  const FORMAT_VERSION = 2;
   const MAX_VIEWS = 99;
   const MAX_REF_LENGTH = 32;
   const REF_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
@@ -232,7 +237,9 @@ const scope = { crypto: globalThis.crypto };
   /** Derived from the plan's wall clock, with no stored status to go stale. */
   function followUpStatus(item, { now = Date.now(), timeZone } = {}) {
     if (Number(item.progress) === 100) return 'done';
-    if (!item.end) return 'undated';
+    // A milestone is due at its moment, an activity at its end.
+    const due = item.type === 'milestone' ? item.start : item.end;
+    if (!due) return 'undated';
     let clock = followUpClocks.get(timeZone);
     if (!clock) {
       clock = new Intl.DateTimeFormat('en-GB', {
@@ -251,17 +258,17 @@ const scope = { crypto: globalThis.crypto };
     );
     const today = `${parts.year}-${parts.month}-${parts.day}`;
     const localMinute = `${today}T${parts.hour}:${parts.minute}`;
-    if (timeOf(localMinute) >= timeAfter(item.end)) return 'overdue';
-    return item.end.slice(0, 10) === today ? 'today' : 'upcoming';
+    if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
+    return due.slice(0, 10) === today ? 'today' : 'upcoming';
   }
   /** The first moment at or after `time` where a record shaped like `like`
    * may start: a day record starts only at midnight. */
   const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
-  // The values a plan's records hold: activity starts and milestone dates.
-  const recordTimes = (project) => [
-    ...(project?.items || []).flatMap((item) => (item.start === undefined ? [] : [item.start])),
-    ...(project?.milestones || []).map((point) => point.date),
-  ];
+  // The values a plan's records hold: activity starts and milestone moments.
+  const recordTimes = (project) =>
+    (project?.items || []).flatMap((item) =>
+      item.start === undefined || item.type === 'period' ? [] : [item.start],
+    );
   /** Whether a plan holds any local time; `only` when it holds nothing else. */
   function holdsLocalTimes(project, { only = false } = {}) {
     const times = recordTimes(project);
@@ -319,15 +326,15 @@ const scope = { crypto: globalThis.crypto };
 
   /**
    * The work days of a project: Monday to Friday, except days covered by a
-   * vacation period. Dates are UTC midnight timestamps. `firstWorkDay` and
+   * period: every period is time off, such as a vacation. Dates are UTC midnight timestamps. `firstWorkDay` and
    * `lastWorkDay` may return a day after MAX_DATE, which callers reject.
    */
   function workCalendar(periodIndicators = []) {
     const limit = parseDate(MAX_DATE) + 400 * DAY;
-    // Vacation periods merged into sorted, disjoint [start, end] ranges.
+    // Periods merged into sorted, disjoint [start, end] ranges.
     const ranges = [];
     for (const [start, end] of periodIndicators
-      .filter((period) => period && period.vacation !== false)
+      .filter(Boolean)
       .map((period) => [parseDate(period.start), parseDate(period.end)])
       .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && start <= end)
       .sort((left, right) => left[0] - right[0])) {
@@ -335,8 +342,8 @@ const scope = { crypto: globalThis.crypto };
       if (last && start <= last[1] + DAY) last[1] = Math.max(last[1], end);
       else ranges.push([start, end]);
     }
-    // The vacation range that holds `time`, or null.
-    function vacation(time) {
+    // The period range that holds `time`, or null.
+    function offWork(time) {
       let low = 0;
       let high = ranges.length - 1;
       while (low <= high) {
@@ -351,11 +358,11 @@ const scope = { crypto: globalThis.crypto };
       const weekday = new Date(time).getUTCDay();
       return weekday === 0 || weekday === 6;
     };
-    const isWorkDay = (time) => !weekend(time) && !vacation(time);
+    const isWorkDay = (time) => !weekend(time) && !offWork(time);
     function firstWorkDay(time) {
       let day = time;
       while (day <= limit) {
-        const range = vacation(day);
+        const range = offWork(day);
         if (range) day = range[1] + DAY;
         else if (weekend(day)) day += DAY;
         else return day;
@@ -378,6 +385,77 @@ const scope = { crypto: globalThis.crypto };
     /** An activity's length in work days, read from its dates: at least one. */
     const durationOf = (start, end) => Math.max(1, countWorkDays(start, end));
     return { isWorkDay, firstWorkDay, countWorkDays, lastWorkDay, durationOf };
+  }
+
+  /*
+   * The kinds of record a project holds: activities, milestones and periods.
+   * All of them are `items`, told apart by `type`, which an activity leaves
+   * out. Code outside the model reaches them through these functions, so
+   * their storage can change behind them.
+   */
+  const RECORD_KINDS = Object.freeze(['activity', 'milestone', 'period']);
+  /** The kind of one record: its `type`, or `activity` without one. */
+  const kindOf = (record) => record?.type || 'activity';
+  function recordCollection(kind) {
+    if (!RECORD_KINDS.includes(kind)) throw new TypeError(`Unknown record kind ${kind}`);
+    return 'items';
+  }
+  // Each items array's records by kind, kept while the array keeps its length.
+  const recordCache = new WeakMap();
+  /** The project's records of one kind, in their stored order. */
+  function records(project, kind) {
+    recordCollection(kind);
+    const list = project?.items;
+    if (!Array.isArray(list)) return [];
+    let cached = recordCache.get(list);
+    if (!cached || cached.length !== list.length || cached.first !== list[0]) {
+      cached = { length: list.length, first: list[0], kinds: new Map() };
+      recordCache.set(list, cached);
+    }
+    // A list of one kind is that kind's records, the stored array itself.
+    if (!cached.kinds.has(kind)) {
+      const found = list.filter((record) => kindOf(record) === kind);
+      cached.kinds.set(kind, found.length && found.length === list.length ? list : found);
+    }
+    return cached.kinds.get(kind);
+  }
+  /*
+   * Replace the records of one kind. Records of other kinds keep their
+   * places; the new ones take the places of the old in their own order,
+   * and any more follow at the end. A record without a type is given the
+   * kind's type.
+   */
+  function setRecords(project, kind, list) {
+    recordCollection(kind);
+    const next = (Array.isArray(list) ? list : []).map((record) => {
+      if (kind !== 'activity' && record && typeof record === 'object' && !record.type)
+        record.type = kind;
+      return record;
+    });
+    const items = [];
+    let index = 0;
+    for (const record of Array.isArray(project.items) ? project.items : []) {
+      if (kindOf(record) !== kind) items.push(record);
+      else if (index < next.length) items.push(next[index++]);
+    }
+    items.push(...next.slice(index));
+    project.items = items;
+  }
+  function findRecord(project, kind, id) {
+    return records(project, kind).find((record) => record.id === id);
+  }
+  /** The kind of the record with `id`, or '' when the project has none. */
+  function recordKind(project, id) {
+    const record = Array.isArray(project?.items)
+      ? project.items.find((item) => item.id === id)
+      : undefined;
+    return record ? kindOf(record) : '';
+  }
+  /** The kind of record a command targets, or '' for a project or view command. */
+  function commandKind(project, command) {
+    if (command?.collection !== 'items') return '';
+    if (command.record) return kindOf(command.record);
+    return recordKind(project, command.id) || 'activity';
   }
 
   function makeIdRegistry() {
@@ -510,7 +588,8 @@ const scope = { crypto: globalThis.crypto };
 
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
-    if (source.formatVersion !== 1) invalid('manifest.formatVersion', 'must be 1');
+    if (source.formatVersion !== FORMAT_VERSION)
+      invalid('manifest.formatVersion', `must be ${FORMAT_VERSION}`);
     const timeZone =
       source.timeZone === undefined ? undefined : zoneValue(source.timeZone, 'manifest.timeZone');
     const nightHours = source.nightHours === undefined ? undefined : nightValue(source.nightHours);
@@ -635,11 +714,17 @@ const scope = { crypto: globalThis.crypto };
     return Math.min(passed, after);
   }
 
-  function completionBlockers(item, activitiesById) {
+  /*
+   * The predecessors that keep a record from being done: each activity or
+   * milestone it waits for until it is done, or an activity until the
+   * share it may start after. A period is time, not work, and never holds
+   * a record back.
+   */
+  function completionBlockers(item, recordsById) {
     const blockers = [];
     for (const id of item.dependsOn || []) {
-      const predecessor = activitiesById.get(id);
-      if (!predecessor) continue;
+      const predecessor = recordsById.get(id);
+      if (!predecessor || predecessor.type === 'period') continue;
       const progress = predecessor.progress ?? 0,
         required = item.startAfter?.[id] ?? 100;
       if (progress < required) blockers.push({ id, title: predecessor.title, progress, required });
@@ -649,9 +734,9 @@ const scope = { crypto: globalThis.crypto };
 
   // A merged candidate can supply new dependencies while completion still
   // starts from the progress stored at the latest revision.
-  function completionDecision(item, activitiesById, currentProgress = item.progress ?? 0) {
+  function completionDecision(item, recordsById, currentProgress = item.progress ?? 0) {
     if (currentProgress === 100) return { status: 'already-complete' };
-    const blockers = completionBlockers(item, activitiesById);
+    const blockers = completionBlockers(item, recordsById);
     return blockers.length ? { status: 'blocked', blockers } : { status: 'eligible' };
   }
 
@@ -662,23 +747,37 @@ const scope = { crypto: globalThis.crypto };
       ? `must be at least one ${isClock(value) ? 'minute' : 'day'} after dependency ${dependency} ends`
       : `must start after dependency ${dependency} ends`;
 
-  // An activity waits for other activities and for fixed milestones,
-  // events on a set date that wait for nothing themselves.
-  function validateItemDependencies(items, path = 'items', milestones = []) {
+  /*
+   * The first moment a record shaped like `like` may start after waiting
+   * for `parent`: a milestone's moment, or the end of an activity or a
+   * period. NaN when the parent holds no date.
+   */
+  function waitsUntil(parent, like) {
+    if (!parent || parent.start === undefined) return NaN;
+    return parent.type === 'milestone'
+      ? startingAt(timeOf(parent.start), like)
+      : startingAt(timeAfter(parent.end), like);
+  }
+
+  /*
+   * One dependency rule for every record: an activity or a milestone may
+   * wait for any other record, a period waits for nothing, and no record
+   * waits for itself through others. A record starts no earlier than each
+   * predecessor's end, or a milestone's moment. A fixed milestone keeps its
+   * date even when a predecessor ends after it: that is a conflict to show
+   * (`dateConflicts`), not an invalid plan.
+   */
+  function validateItemDependencies(items, path = 'items') {
     const byId = new Map(items.map((item) => [item.id, item]));
-    const fixed = new Map(
-      milestones.filter((milestone) => milestone.fixed).map((point) => [point.id, point]),
-    );
     const visiting = new Set();
     const visited = new Set();
     function visit(item) {
       if (visited.has(item.id)) return;
       if (visiting.has(item.id)) invalid(`${path}.${item.id}.dependsOn`, 'dependency cycle');
       visiting.add(item.id);
-      for (const dependency of item.dependsOn) {
-        if (fixed.has(dependency)) continue;
+      for (const dependency of item.dependsOn || []) {
         if (!byId.has(dependency))
-          invalid(`${path}.${item.id}.dependsOn`, `unknown activity ${dependency}`);
+          invalid(`${path}.${item.id}.dependsOn`, `unknown record ${dependency}`);
         visit(byId.get(dependency));
       }
       visiting.delete(item.id);
@@ -688,28 +787,19 @@ const scope = { crypto: globalThis.crypto };
 
     // Tidigar dependencies are finish-to-start with one whole unit of the
     // predecessor, a day or a minute, between records, and a day record
-    // starts at the next midnight; a fixed milestone lets work start at its
-    // own date. An
-    // activity that starts after part of another starts no earlier than that
-    // one: editors place it by `startThreshold`, but the stored contract does
-    // not depend on the work calendar, so a new vacation never invalidates a
-    // project. Deserialization validates this contract and never moves user
-    // dates as a side effect.
+    // starts at the next midnight; a milestone lets what waits for it start
+    // at its own moment. An activity that starts after part of another
+    // starts no earlier than that one: editors place it by `startThreshold`,
+    // but the stored contract does not depend on the work calendar, so a new
+    // vacation never invalidates a project. Deserialization validates this
+    // contract and never moves user dates as a side effect.
     for (const item of items) {
-      for (const dependency of item.dependsOn) {
-        const point = fixed.get(dependency);
-        if (point) {
-          if (item.startAfter?.[dependency] !== undefined)
-            invalid(`${path}.${item.id}.startAfter`, `must not name fixed milestone ${dependency}`);
-          if (
-            item.start !== undefined &&
-            timeOf(item.start) < startingAt(timeOf(point.date), item.start)
-          )
-            invalid(`${path}.${item.id}.start`, `must not be before fixed milestone ${dependency}`);
-          continue;
-        }
+      if (item.type === 'milestone' && item.fixed) continue;
+      for (const dependency of item.dependsOn || []) {
         const parent = byId.get(dependency);
         if (item.startAfter?.[dependency] !== undefined) {
+          if (parent.type)
+            invalid(`${path}.${item.id}.startAfter`, `must name an activity, not ${dependency}`);
           if (item.start === undefined || parent.start === undefined || isClock(parent.start))
             invalid(`${path}.${item.id}.startAfter`, 'only day records overlap');
           if (item.start < parent.start)
@@ -719,14 +809,181 @@ const scope = { crypto: globalThis.crypto };
             );
           continue;
         }
-        if (
-          item.start !== undefined &&
-          parent.end !== undefined &&
-          timeOf(item.start) < startingAt(timeAfter(parent.end), item.start)
-        )
-          invalid(`${path}.${item.id}.start`, afterMessage(item.start, parent.end, dependency));
+        if (item.start === undefined || parent.start === undefined) continue;
+        if (timeOf(item.start) < waitsUntil(parent, item.start))
+          invalid(
+            `${path}.${item.id}.start`,
+            parent.type === 'milestone'
+              ? `must not be before ${parent.fixed ? 'fixed ' : ''}milestone ${dependency}`
+              : afterMessage(item.start, parent.end, dependency),
+          );
       }
     }
+  }
+
+  /*
+   * The fixed milestones whose date comes before a predecessor allows:
+   * `{ id, dependency }` for each such pair, in item order. The date stays
+   * and the editor shows the conflict.
+   */
+  function dateConflicts(project) {
+    const items = Array.isArray(project?.items) ? project.items : [];
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const conflicts = [];
+    for (const item of items) {
+      if (item.type !== 'milestone' || !item.fixed || item.start === undefined) continue;
+      for (const dependency of item.dependsOn || [])
+        if (timeOf(item.start) < waitsUntil(byId.get(dependency), item.start))
+          conflicts.push({ id: item.id, dependency });
+    }
+    return conflicts;
+  }
+
+  /*
+   * An activity as a milestone, or a milestone as an activity, keeping its
+   * identity, title, description, key, values, dependencies and assignee. A
+   * milestone marks a result, so an activity becomes one at its end; a
+   * milestone becomes an activity of one day, or one hour at a local time,
+   * that ends at its moment. Progress becomes a status: only a finished
+   * activity becomes a finished milestone. Dates may then need planning.
+   */
+  function convertRecord(record, type) {
+    const from = kindOf(record);
+    if (from === type || from === 'period' || !['activity', 'milestone'].includes(type))
+      throw new TypeError(`Cannot convert a ${from} to a ${type}`);
+    const common = {
+      id: record.id,
+      projectId: record.projectId,
+      title: record.title,
+      description: record.description || '',
+      values: { ...(record.values || {}) },
+      dependsOn: [...(record.dependsOn || [])],
+      ...(record.ref ? { ref: record.ref } : {}),
+      ...(record.assignee ? { assignee: record.assignee } : {}),
+    };
+    if (type === 'milestone')
+      return {
+        ...common,
+        type: 'milestone',
+        progress: record.progress === 100 ? 100 : 0,
+        ...(record.end === undefined ? {} : { start: valueAt(timeAfter(record.end), record.end) }),
+      };
+    const unit = isClock(record.start) ? 60 * MINUTE : DAY;
+    const end =
+      record.start === undefined ? undefined : timeOf(record.start) - timeScale(record.start).unit;
+    return {
+      ...common,
+      progress: record.progress || 0,
+      ...(end === undefined
+        ? {}
+        : {
+            start: valueAt(end + timeScale(record.start).unit - unit, record.start),
+            end: valueAt(end, record.start),
+          }),
+    };
+  }
+
+  /* The milestone or period of another plan that an incoming one copies:
+   * that plan's `manifest.projectId` and the item's ID, the same in every
+   * storage. */
+  function sourceValue(value, path, ownProjectId) {
+    if (value === undefined) return null;
+    const source = requireRecord(value, path);
+    const projectId = uuidValue(source.projectId, `${path}.projectId`);
+    if (projectId === ownProjectId) invalid(`${path}.projectId`, 'must name another plan');
+    return { projectId, id: uuidValue(source.id, `${path}.id`) };
+  }
+
+  // Fields a record of one type must leave out.
+  const FOREIGN_FIELDS = Object.freeze({
+    activity: Object.freeze(['fixed', 'source']),
+    milestone: Object.freeze(['end', 'startAfter']),
+    period: Object.freeze(['progress', 'startAfter', 'assignee', 'fixed']),
+  });
+
+  function normalizeActivity(source, path, base) {
+    const progress = source.progress === undefined ? 0 : source.progress;
+    if (!PROGRESS_VALUES.has(progress))
+      invalid(`${path}.progress`, 'must be one of 0, 25, 50, 75, or 100');
+    const dated = source.start !== undefined || source.end !== undefined;
+    const start = dated ? scaleValue(source.start, `${path}.start`) : undefined;
+    const end = dated ? scaleValue(source.end, `${path}.end`) : undefined;
+    if (isClock(start) !== isClock(end))
+      invalid(path, 'start and end must both be dates or both local times');
+    if (start > end) invalid(path, 'start must not be after end');
+    if (isClock(start) && source.startAfter !== undefined)
+      invalid(`${path}.startAfter`, 'only day records overlap');
+    const startAfter = normalizeStartAfter(source.startAfter, base.dependsOn, `${path}.startAfter`);
+    const assignee = assigneeValue(source.assignee, `${path}.assignee`);
+    const record = {
+      id: base.id,
+      projectId: base.projectId,
+      title: base.title,
+      description: base.description,
+      progress,
+      ...(dated ? { start, end } : {}),
+      values: base.values,
+      dependsOn: base.dependsOn,
+    };
+    // Only an activity that overlaps another carries the field.
+    if (Object.keys(startAfter).length) record.startAfter = startAfter;
+    if (base.ref) record.ref = base.ref;
+    if (assignee) record.assignee = assignee;
+    return record;
+  }
+
+  // A milestone is a moment, a date or a local time, or holds no date yet.
+  // Its progress is a status: open or done. A fixed milestone keeps its
+  // date; an incoming one is a fixed copy of another plan's milestone.
+  function normalizeMilestone(source, path, base) {
+    const progress = source.progress === undefined ? 0 : source.progress;
+    if (progress !== 0 && progress !== 100) invalid(`${path}.progress`, 'must be 0 or 100');
+    const start =
+      source.start === undefined ? undefined : scaleValue(source.start, `${path}.start`);
+    const fixed = booleanValue(source.fixed, `${path}.fixed`, false);
+    if (fixed && start === undefined) invalid(`${path}.start`, 'a fixed milestone needs a date');
+    const origin = sourceValue(source.source, `${path}.source`, base.projectId);
+    // An incoming milestone is another plan's date.
+    if (origin && !fixed) invalid(`${path}.source`, 'needs a fixed milestone');
+    const assignee = assigneeValue(source.assignee, `${path}.assignee`);
+    return {
+      id: base.id,
+      projectId: base.projectId,
+      type: 'milestone',
+      title: base.title,
+      description: base.description,
+      progress,
+      ...(start === undefined ? {} : { start }),
+      values: base.values,
+      dependsOn: base.dependsOn,
+      ...(fixed ? { fixed } : {}),
+      ...(base.ref ? { ref: base.ref } : {}),
+      ...(origin ? { source: origin } : {}),
+      ...(assignee ? { assignee } : {}),
+    };
+  }
+
+  // A period is a span of dates off work, such as a vacation: work-day
+  // planning skips it. Its dimension values give it a color. An incoming
+  // period is a copy of another plan's period.
+  function normalizePeriod(source, path, base) {
+    if (base.dependsOn.length) invalid(`${path}.dependsOn`, 'a period depends on nothing');
+    const start = dateValue(source.start, `${path}.start`);
+    const end = dateValue(source.end, `${path}.end`);
+    if (start > end) invalid(path, 'start must not be after end');
+    const origin = sourceValue(source.source, `${path}.source`, base.projectId);
+    return {
+      id: base.id,
+      projectId: base.projectId,
+      type: 'period',
+      title: base.title,
+      description: base.description,
+      start,
+      end,
+      values: base.values,
+      ...(base.ref ? { ref: base.ref } : {}),
+      ...(origin ? { source: origin } : {}),
+    };
   }
 
   function normalizeItems(
@@ -739,43 +996,31 @@ const scope = { crypto: globalThis.crypto };
     const items = requireArray(value, 'items', MAX_ITEMS).map((item, index) => {
       const path = `items[${index}]`;
       const source = requireRecord(item, path);
+      const type = source.type === undefined ? 'activity' : source.type;
+      if (!RECORD_KINDS.includes(type))
+        invalid(`${path}.type`, 'must be activity, milestone or period');
+      for (const field of FOREIGN_FIELDS[type])
+        if (source[field] !== undefined) invalid(`${path}.${field}`, `a ${type} has no ${field}`);
       const id = registry.add(source.id, `${path}.id`);
-      const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
-      const title = stringValue(source.title, `${path}.title`, 180, false);
-      const description = stringValue(source.description, `${path}.description`, 12000, false);
-      const progress = source.progress === undefined ? 0 : source.progress;
-      if (!PROGRESS_VALUES.has(progress))
-        invalid(`${path}.progress`, 'must be one of 0, 25, 50, 75, or 100');
-      const dated = source.start !== undefined || source.end !== undefined;
-      const start = dated ? scaleValue(source.start, `${path}.start`) : undefined;
-      const end = dated ? scaleValue(source.end, `${path}.end`) : undefined;
-      if (isClock(start) !== isClock(end))
-        invalid(path, 'start and end must both be dates or both local times');
-      if (start > end) invalid(path, 'start must not be after end');
-      if (isClock(start) && source.startAfter !== undefined)
-        invalid(`${path}.startAfter`, 'only day records overlap');
-      const values = normalizeValues(source.values, context, `${path}.values`);
-      const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
-      const startAfter = normalizeStartAfter(source.startAfter, dependsOn, `${path}.startAfter`);
-      const ref = refValue(source.ref, `${path}.ref`);
-      const assignee = assigneeValue(source.assignee, `${path}.assignee`);
-      const record = {
+      const base = {
         id,
-        projectId,
-        title,
-        description,
-        progress,
-        ...(dated ? { start, end } : {}),
-        values,
-        dependsOn,
+        projectId: ownerValue(source.projectId, context, `${path}.projectId`),
+        // A milestone or a period is always named; an activity draft may not be yet.
+        title: stringValue(source.title, `${path}.title`, 180, type !== 'activity'),
+        description:
+          source.description === undefined && type !== 'activity'
+            ? ''
+            : stringValue(source.description, `${path}.description`, 12000, false),
+        values: normalizeValues(source.values, context, `${path}.values`),
+        dependsOn: normalizeDependencies(source.dependsOn, `${path}.dependsOn`),
+        ref: refValue(source.ref, `${path}.ref`),
       };
-      // Only an activity that overlaps another carries the field.
-      if (Object.keys(startAfter).length) record.startAfter = startAfter;
-      if (ref) record.ref = ref;
-      if (assignee) record.assignee = assignee;
-      return record;
+      if (base.dependsOn.includes(id))
+        invalid(`${path}.dependsOn`, 'a record does not wait for itself');
+      if (type === 'milestone') return normalizeMilestone(source, path, base);
+      if (type === 'period') return normalizePeriod(source, path, base);
+      return normalizeActivity(source, path, base);
     });
-    // A whole project checks dependencies once its milestones are known.
     if (!deferDependencies) validateItemDependencies(items, 'items');
     return items;
   }
@@ -1074,9 +1319,9 @@ const scope = { crypto: globalThis.crypto };
   }
 
   /*
-   * An activity's assignee: the positive member number the plan's
-   * organisation gave an account. It means nothing outside that
-   * organisation; an unassigned activity leaves the field out.
+   * An activity's or a milestone's assignee: the positive member number
+   * the plan's organisation gave an account. It means nothing outside that
+   * organisation; an unassigned record leaves the field out.
    */
   function validAssignee(value) {
     return Number.isSafeInteger(value) && value > 0;
@@ -1130,24 +1375,24 @@ const scope = { crypto: globalThis.crypto };
 
   /*
    * The next reference key with `prefix`: one more than the highest number
-   * any activity or milestone already uses with it, so keys are never reused
+   * any record already uses with it, so keys are never reused
    * while their records remain. Without a prefix there is none.
    */
   function nextRef(project, prefix = project?.manifest?.refPrefix || '') {
     if (!prefix) return '';
     const pattern = new RegExp(`^${prefix}-(\\d{1,9})$`, 'i');
     let highest = 0;
-    for (const record of [...(project.items || []), ...(project.milestones || [])]) {
+    for (const record of project.items || []) {
       const match = pattern.exec(String(record.ref || '').trim());
       if (match) highest = Math.max(highest, Number(match[1]));
     }
     return `${prefix}-${highest + 1}`;
   }
 
-  /* The IDs of activities and milestones whose key another record also has. */
+  /* The IDs of records whose key another record also has. */
   function duplicateRefs(project) {
     const owners = new Map();
-    for (const record of [...(project?.items || []), ...(project?.milestones || [])]) {
+    for (const record of project?.items || []) {
       const key = String(record.ref || '')
         .trim()
         .toUpperCase();
@@ -1163,105 +1408,14 @@ const scope = { crypto: globalThis.crypto };
     return value;
   }
 
-  /* The milestone of another plan that an incoming milestone copies: that
-   * plan's `manifest.projectId` and the milestone's ID, the same in every
-   * storage. */
-  function milestoneSourceValue(value, path, ownProjectId) {
-    if (value === undefined) return null;
-    const source = requireRecord(value, path);
-    const projectId = uuidValue(source.projectId, `${path}.projectId`);
-    if (projectId === ownProjectId) invalid(`${path}.projectId`, 'must name another plan');
-    return { projectId, id: uuidValue(source.id, `${path}.id`) };
-  }
-
-  function normalizeMilestones(value, contextInput, itemIds, registry = makeIdRegistry()) {
-    const context = contextFrom(contextInput);
-    const milestones = requireArray(value, 'milestones', MAX_MILESTONES);
-    const byItemId = itemIds || new Set();
-    return milestones.map((milestone, index) => {
-      const path = `milestones[${index}]`;
-      const source = requireRecord(milestone, path);
-      const id = registry.add(source.id, `${path}.id`);
-      const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
-      const title = stringValue(source.title, `${path}.title`, 180, true);
-      const date = scaleValue(source.date, `${path}.date`);
-      const dependsOn = normalizeDependencies(source.dependsOn, `${path}.dependsOn`);
-      const fixed = booleanValue(source.fixed, `${path}.fixed`, false);
-      // A fixed milestone is an event on a set date: work waits for
-      // it, and it waits for nothing.
-      if (fixed && dependsOn.length)
-        invalid(`${path}.dependsOn`, 'must be empty for a fixed milestone');
-      for (const dependency of dependsOn) {
-        if (!byItemId.has(dependency))
-          invalid(`${path}.dependsOn`, `unknown activity ${dependency}`);
-      }
-      const ref = refValue(source.ref, `${path}.ref`);
-      const origin = milestoneSourceValue(source.source, `${path}.source`, projectId);
-      // An incoming milestone is another plan's date: it waits for nothing here.
-      if (origin && !fixed) invalid(`${path}.source`, 'needs a fixed milestone');
-      return {
-        id,
-        projectId,
-        title,
-        date,
-        dependsOn,
-        fixed,
-        ...(ref ? { ref } : {}),
-        ...(origin ? { source: origin } : {}),
-      };
-    });
-  }
-
-  function normalizePeriodIndicators(value, contextInput, registry = makeIdRegistry()) {
-    const context = contextFrom(contextInput);
-    const indicators = requireArray(value, 'periodIndicators', MAX_PERIOD_INDICATORS);
-    return indicators.map((indicator, index) => {
-      const path = `periodIndicators[${index}]`;
-      const source = requireRecord(indicator, path);
-      const id = registry.add(source.id, `${path}.id`);
-      const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
-      const title = stringValue(source.title, `${path}.title`, 180, true);
-      const start = dateValue(source.start, `${path}.start`);
-      const end = dateValue(source.end, `${path}.end`);
-      if (start > end) invalid(path, 'start must not be after end');
-      const color = colorValue(source.color, `${path}.color`).toLowerCase();
-      const vacation = booleanValue(source.vacation, `${path}.vacation`, true);
-      return { id, projectId, title, start, end, color, vacation };
-    });
-  }
-
-  function validateMilestoneDates(milestones, items) {
-    const byId = new Map(items.map((item) => [item.id, item]));
-    for (let index = 0; index < milestones.length; index += 1) {
-      const milestone = milestones[index];
-      for (const dependency of milestone.dependsOn) {
-        const parent = byId.get(dependency);
-        if (!parent) invalid(`milestones[${index}].dependsOn`, `unknown activity ${dependency}`);
-        if (
-          parent.end !== undefined &&
-          timeOf(milestone.date) < startingAt(timeAfter(parent.end), milestone.date)
-        )
-          invalid(
-            `milestones[${index}].date`,
-            afterMessage(milestone.date, parent.end, dependency),
-          );
-      }
-    }
-  }
-
   /** Validate and deep-normalize a complete canonical project. */
   function normalizeProject(value) {
     const source = requireRecord(value, 'project');
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
-    const items = normalizeItems(source.items, manifest, registry, true);
-    const itemIds = new Set(items.map((item) => item.id));
+    const items = normalizeItems(source.items, manifest, registry);
     const sharedViews = normalizeViews(source.sharedViews, manifest, registry);
-    const milestones = normalizeMilestones(source.milestones, manifest, itemIds, registry);
-    const periodIndicators = normalizePeriodIndicators(source.periodIndicators, manifest, registry);
-    validateItemDependencies(items, 'items', milestones);
-    validateMilestoneDates(milestones, items);
-    return { manifest, items, sharedViews, milestones, periodIndicators };
+    return { manifest, items, sharedViews };
   }
 
   /**
@@ -1282,8 +1436,6 @@ const scope = { crypto: globalThis.crypto };
       manifest: { ...source.manifest, projectId, name },
       items: own(source.items),
       sharedViews: own(source.sharedViews),
-      milestones: own(source.milestones),
-      periodIndicators: own(source.periodIndicators),
     });
   }
 
@@ -1301,7 +1453,7 @@ const scope = { crypto: globalThis.crypto };
       new Map(dimension.options.map((choice) => [choice.id, choice.name])),
     ]);
     return (item) =>
-      set.every(([dimension, option]) => item.values[dimension] === option) &&
+      set.every(([dimension, option]) => item.values?.[dimension] === option) &&
       (!search ||
         (
           (item.ref ? `${item.ref} ` : '') +
@@ -1309,7 +1461,7 @@ const scope = { crypto: globalThis.crypto };
           ' ' +
           item.description +
           ' ' +
-          names.map(([id, options]) => options.get(item.values[id]) || '').join(' ')
+          names.map(([id, options]) => options.get(item.values?.[id]) || '').join(' ')
         )
           .toLocaleLowerCase(locale)
           .includes(search));
@@ -1558,7 +1710,18 @@ const scope = { crypto: globalThis.crypto };
     followUpColor: FOLLOW_UP_COLOR,
     enumValues: ENUM_VALUES,
     renamedViewValues: RENAMED_VIEW_VALUES,
+    formatVersion: FORMAT_VERSION,
     workCalendar,
+    recordKinds: RECORD_KINDS,
+    kindOf,
+    dateConflicts,
+    convertRecord,
+    recordCollection,
+    records,
+    setRecords,
+    findRecord,
+    recordKind,
+    commandKind,
     startThreshold,
     completionBlockers,
     completionDecision,
@@ -1653,12 +1816,8 @@ const scope = { crypto: globalThis.crypto };
         ]),
       );
       const items = list(source.items);
-      const milestones = list(source.milestones);
-
       const byId = new Map(items.map((item) => [item.id, item]));
-      const fixed = new Map(
-        milestones.filter((point) => point.fixed === true).map((point) => [point.id, point]),
-      );
+      const isPoint = (record) => record?.type === 'milestone';
 
       if (!datesOnly) {
         // A value for an option its dimension no longer has.
@@ -1686,24 +1845,22 @@ const scope = { crypto: globalThis.crypto };
               mark('sharedViews', view.id, field);
             }
 
-        // Dependencies on records that are gone, or on a milestone that is no
-        // longer fixed.
-        const keep = (record, collection, allowed) => {
-          if (!Array.isArray(record.dependsOn)) return;
-          const kept = record.dependsOn.filter(allowed);
-          if (kept.length === record.dependsOn.length) return;
-          record.dependsOn = kept;
-          mark(collection, record.id, 'dependsOn');
-        };
+        // Dependencies on records that are gone, or of a period.
         // Another plan's date only stays one while the milestone is fixed.
-        for (const point of milestones)
-          if (point.fixed !== true && point.source !== undefined) {
-            delete point.source;
-            mark('milestones', point.id, 'source');
+        for (const item of items) {
+          if (isPoint(item) && item.fixed !== true && item.source !== undefined) {
+            delete item.source;
+            mark('items', item.id, 'source');
           }
-        for (const item of items) keep(item, 'items', (id) => byId.has(id) || fixed.has(id));
-        for (const point of milestones)
-          if (point.fixed !== true) keep(point, 'milestones', (id) => byId.has(id));
+          if (!Array.isArray(item.dependsOn)) continue;
+          const kept =
+            item.type === 'period'
+              ? []
+              : item.dependsOn.filter((id) => id !== item.id && byId.has(id));
+          if (kept.length === item.dependsOn.length) continue;
+          item.dependsOn = kept;
+          mark('items', item.id, 'dependsOn');
+        }
       }
 
       // Two offline edits can close a cycle. Walking in record order, which
@@ -1729,7 +1886,7 @@ const scope = { crypto: globalThis.crypto };
 
       if (!datesOnly) {
         // Overlaps outlive neither their dependency nor a predecessor that
-        // became a fixed milestone.
+        // became a milestone.
         for (const item of items) {
           if (!item.startAfter || typeof item.startAfter !== 'object') continue;
           const dependsOn = Array.isArray(item.dependsOn) ? item.dependsOn : [];
@@ -1738,6 +1895,7 @@ const scope = { crypto: globalThis.crypto };
               ([id]) =>
                 dependsOn.includes(id) &&
                 item.start !== undefined &&
+                !byId.get(id)?.type &&
                 byId.get(id)?.start !== undefined,
             ),
           );
@@ -1749,27 +1907,30 @@ const scope = { crypto: globalThis.crypto };
       }
 
       // What starts before what it waits for has ended moves later, keeping
-      // its length, as an edit would.
+      // its length, as an edit would. A fixed milestone and a period keep
+      // their dates.
       const calendar =
         manifest.schedule === 'work-days'
-          ? model.workCalendar(list(source.periodIndicators))
+          ? model.workCalendar(items.filter((item) => item.type === 'period'))
           : null;
       const earliest = (item, id) => {
-        if (fixed.has(id)) return model.startingAt(parse(fixed.get(id).date), item.start);
-        const percent = item.startAfter?.[id];
-        if (percent === undefined) return model.startingAt(after(byId.get(id)?.end), item.start);
         const parent = byId.get(id);
+        if (isPoint(parent)) return model.startingAt(parse(parent.start), item.start);
+        const percent = item.startAfter?.[id];
+        if (percent === undefined) return model.startingAt(after(parent?.end), item.start);
         if (datesOnly) return parse(parent?.start);
         if (!Number.isFinite(parse(parent.start)) || !Number.isFinite(parse(parent.end)))
           return NaN;
         return model.startThreshold(parent, percent, calendar);
       };
       for (const item of order) {
+        if (item.type === 'period' || (isPoint(item) && item.fixed === true)) continue;
+        const point = isPoint(item);
         const start = parse(item.start);
-        const end = parse(item.end);
+        const end = point ? start : parse(item.end);
         const parents = Array.isArray(item.dependsOn)
           ? item.dependsOn
-              .filter((id) => fixed.has(id) || byId.get(id)?.start !== undefined)
+              .filter((id) => byId.get(id)?.start !== undefined)
               .map((id) => earliest(item, id))
           : [];
         if (
@@ -1781,6 +1942,12 @@ const scope = { crypto: globalThis.crypto };
           continue;
         const minimum = Math.max(...parents, start);
         if (minimum === start) continue;
+        if (point) {
+          if (minimum > last(item.start)) continue;
+          item.start = model.valueAt(minimum, item.start);
+          mark('items', item.id, 'start');
+          continue;
+        }
         let nextStart = minimum;
         let nextEnd = end + (minimum - start);
         if (calendar && !model.isClock(item.start)) {
@@ -1791,18 +1958,6 @@ const scope = { crypto: globalThis.crypto };
         item.start = model.valueAt(nextStart, item.start);
         item.end = model.valueAt(nextEnd, item.end);
         mark('items', item.id, 'start');
-      }
-      for (const point of milestones) {
-        if (point.fixed === true || !Array.isArray(point.dependsOn)) continue;
-        const date = parse(point.date);
-        const parents = point.dependsOn
-          .filter((id) => byId.get(id)?.end !== undefined)
-          .map((id) => model.startingAt(after(byId.get(id)?.end), point.date));
-        if (!Number.isFinite(date) || !parents.every(Number.isFinite)) continue;
-        const minimum = Math.max(...parents, date);
-        if (minimum === date || minimum > last(point.date)) continue;
-        point.date = model.valueAt(minimum, point.date);
-        mark('milestones', point.id, 'date');
       }
 
       return { project: model.normalizeProject(source), repairs: [...changed.values()] };
@@ -2137,15 +2292,14 @@ const scope = { crypto: globalThis.crypto };
 
       const rawItems = asList('i', 'i');
       const rawMilestones = asList('s', 's');
+      const rawPeriods = asList('p', 'p');
       const titleOf = (entry) =>
         Array.isArray(entry) ? entry[0] : isRecord(entry) ? entry.title : undefined;
-      const fixedOf = (entry) => {
-        const value = Array.isArray(entry) ? entry[3] : isRecord(entry) ? entry.fixed : undefined;
-        return value === 1 || value === true || value === '1' || value === 'true';
-      };
-      // A predecessor index, or the title of an activity or a milestone.
-      const reference = (value, where, allowMilestones) => {
-        const count = allowMilestones ? rawItems.length + rawMilestones.length : rawItems.length;
+      // Predecessor indices count the activities, then the milestones, then
+      // the periods. Any activity or milestone may wait for any record.
+      const count = rawItems.length + rawMilestones.length + rawPeriods.length;
+      // A predecessor index, or the title of an activity, a milestone or a period.
+      const reference = (value, where) => {
         if (Number.isInteger(value) && value >= 0 && value < count) return value;
         if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
           const index = Number(value.trim());
@@ -2157,16 +2311,58 @@ const scope = { crypto: globalThis.crypto };
             note(where, `dependency ${show(value)} became activity index ${activity}`);
             return activity;
           }
-          const milestone = allowMilestones
-            ? rawMilestones.findIndex((entry) => sameText(titleOf(entry), value))
-            : -1;
-          if (milestone >= 0) {
-            note(where, `dependency ${show(value)} became index ${rawItems.length + milestone}`);
-            return rawItems.length + milestone;
+          const others = [...rawMilestones, ...rawPeriods].findIndex((entry) =>
+            sameText(titleOf(entry), value),
+          );
+          if (others >= 0) {
+            note(where, `dependency ${show(value)} became index ${rawItems.length + others}`);
+            return rawItems.length + others;
           }
         }
         note(where, `dependency ${show(value)} refers to nothing and was removed`);
         return null;
+      };
+      // Values by option number or name, in dimension order.
+      const valuesOf = (raw, where) => {
+        let values = raw;
+        if (values === undefined || values === null) values = [];
+        if (isRecord(values)) {
+          const byDimension = values;
+          values = dimensions.map((dimension, position) => {
+            const key = Object.keys(byDimension).find(
+              (name) => name === String(position) || sameText(name, dimension[0]),
+            );
+            return key === undefined ? 0 : byDimension[key];
+          });
+          note(where, 'values given by dimension became a list in dimension order');
+        }
+        if (!Array.isArray(values)) {
+          note(where, `values ${show(values)} are not a list and were left out`);
+          values = [];
+        }
+        if (values.length > dimensions.length) {
+          note(
+            where,
+            `${values.length - dimensions.length} values beyond the dimensions were removed`,
+          );
+          values = values.slice(0, dimensions.length);
+        }
+        return values.map((value, position) => optionOf(dimensions[position], value, where));
+      };
+      // A record's predecessors without itself or repeats.
+      const predecessorsOf = (raw, index, where) => {
+        let dependsOn = raw;
+        if (dependsOn === undefined || dependsOn === null) dependsOn = [];
+        if (!Array.isArray(dependsOn)) dependsOn = [dependsOn];
+        return dependsOn.map((value) => {
+          const predecessor = reference(value, where);
+          if (predecessor === null) return null;
+          if (predecessor === index) {
+            note(where, 'a dependency on itself was removed');
+            return null;
+          }
+          return predecessor;
+        });
       };
       const shareOf = (value, where) => {
         if (value === undefined || value === null) return 100;
@@ -2220,33 +2416,8 @@ const scope = { crypto: globalThis.crypto };
           note(where, `progress ${show(progress)} became ${nearest}`);
           progress = nearest;
         }
-        let values = entry[5];
-        if (values === undefined || values === null) values = [];
-        if (isRecord(values)) {
-          const byDimension = values;
-          values = dimensions.map((dimension, position) => {
-            const key = Object.keys(byDimension).find(
-              (name) => name === String(position) || sameText(name, dimension[0]),
-            );
-            return key === undefined ? 0 : byDimension[key];
-          });
-          note(where, 'values given by dimension became a list in dimension order');
-        }
-        if (!Array.isArray(values)) {
-          note(where, `values ${show(values)} are not a list and were left out`);
-          values = [];
-        }
-        if (values.length > dimensions.length) {
-          note(
-            where,
-            `${values.length - dimensions.length} values beyond the dimensions were removed`,
-          );
-          values = values.slice(0, dimensions.length);
-        }
-        values = values.map((value, position) => optionOf(dimensions[position], value, where));
-        let dependsOn = entry[6];
-        if (dependsOn === undefined || dependsOn === null) dependsOn = [];
-        if (!Array.isArray(dependsOn)) dependsOn = [dependsOn];
+        const values = valuesOf(entry[5], where);
+        const dependsOn = predecessorsOf(entry[6], index, where);
         let parts = entry[7];
         if (parts === undefined || parts === null) parts = [];
         if (!Array.isArray(parts)) parts = [parts];
@@ -2256,28 +2427,15 @@ const scope = { crypto: globalThis.crypto };
         }
         const kept = [];
         const keptParts = [];
-        dependsOn.forEach((value, position) => {
-          const predecessor = reference(value, where, true);
+        dependsOn.forEach((predecessor, position) => {
           if (predecessor === null) return;
-          if (predecessor === index) {
-            note(where, 'a dependency on itself was removed');
-            return;
-          }
           if (kept.includes(predecessor)) {
             note(where, `a repeated dependency on ${predecessor} was removed`);
             return;
           }
-          const milestone = predecessor >= rawItems.length;
-          if (milestone && !fixedOf(rawMilestones[predecessor - rawItems.length])) {
-            note(
-              where,
-              `a dependency on milestone ${predecessor}, which is not fixed, was removed`,
-            );
-            return;
-          }
           let share = shareOf(parts[position], where);
-          if (milestone && share !== 100) {
-            note(where, 'a fixed milestone always has start-after share 100');
+          if (predecessor >= rawItems.length && share !== 100) {
+            note(where, 'a milestone or a period always has start-after share 100');
             share = 100;
           }
           kept.push(predecessor);
@@ -2288,35 +2446,59 @@ const scope = { crypto: globalThis.crypto };
         return [title, start, length, description, progress, values, kept, keptParts, ref];
       });
 
-      payload.s = rawMilestones.map((rawEntry, index) => {
-        const entry = fromObject(rawEntry, ['title', 'date', 'dependsOn', 'fixed', 'ref']);
-        const where = `milestone ${label('s', index, titleOf(rawEntry))}`;
+      payload.s = rawMilestones.map((rawEntry, position) => {
+        const index = rawItems.length + position;
+        const entry = fromObject(rawEntry, [
+          'title',
+          'date',
+          'dependsOn',
+          'fixed',
+          'ref',
+          'description',
+          'progress',
+          'values',
+        ]);
+        const where = `milestone ${label('s', position, titleOf(rawEntry))}`;
         if (!Array.isArray(entry))
           failAt(where, `expected a milestone tuple, found ${show(rawEntry)}`);
         if (isRecord(rawEntry)) note(where, 'a milestone object became a tuple');
         const title = textOf(entry[0], where, 'title', 180, 'Milestone');
-        const date = dayOf(entry[1], where, 'date');
+        const date = entry[1] === null ? null : dayOf(entry[1], where, 'date');
         const fixed = flag(entry[3], where, 'fixed', 0) ?? 0;
-        let dependsOn = entry[2];
-        if (dependsOn === undefined || dependsOn === null) dependsOn = [];
-        if (!Array.isArray(dependsOn)) dependsOn = [dependsOn];
-        if (fixed === 1 && dependsOn.length) {
-          note(where, 'a fixed milestone has no dependencies; they were removed');
-          dependsOn = [];
-        }
         const kept = [];
-        for (const value of dependsOn) {
-          const predecessor = reference(value, where, false);
+        for (const predecessor of predecessorsOf(entry[2], index, where)) {
           if (predecessor === null) continue;
           if (kept.includes(predecessor))
             note(where, `a repeated dependency on ${predecessor} was removed`);
           else kept.push(predecessor);
         }
-        return [title, date, kept, fixed, textOf(entry[4], where, 'key', 32)];
+        // A milestone is done or not.
+        const progress = entry[6] === undefined || entry[6] === null ? 0 : entry[6];
+        const done = progress === 100 || progress === '100%' || progress === true ? 100 : 0;
+        if (done !== progress) note(where, `progress ${show(progress)} became ${done}`);
+        return [
+          title,
+          date,
+          kept,
+          fixed,
+          textOf(entry[4], where, 'key', 32),
+          textOf(entry[5], where, 'description', 12000),
+          done,
+          valuesOf(entry[7], where),
+        ];
       });
 
-      payload.p = asList('p', 'p').map((rawEntry, index) => {
-        const entry = fromObject(rawEntry, ['title', 'start', 'length', 'color', 'vacation']);
+      payload.p = rawPeriods.map((rawEntry, index) => {
+        const entry = fromObject(rawEntry, [
+          'title',
+          'start',
+          'length',
+          'color',
+          'vacation',
+          'ref',
+          'description',
+          'values',
+        ]);
         const where = `period ${label('p', index, titleOf(rawEntry))}`;
         if (!Array.isArray(entry))
           failAt(where, `expected a period tuple, found ${show(rawEntry)}`);
@@ -2326,12 +2508,16 @@ const scope = { crypto: globalThis.crypto };
         }
         const title = textOf(entry[0], where, 'title', 180, 'Period');
         const start = dayOf(entry[1], where, 'start');
+        // The color and time-off places are written as before and not read.
         return [
           title,
           start,
           lengthOf(start, entry[2], where),
-          colorOf(entry[3], where),
-          flag(entry[4], where, 'vacation', 1) ?? 1,
+          '9aa7b5',
+          1,
+          textOf(entry[5], where, 'key', 32),
+          textOf(entry[6], where, 'description', 12000),
+          valuesOf(entry[7], where),
         ];
       });
       for (const key of ['i', 's', 'p']) if (!payload[key].length) delete payload[key];
@@ -2762,23 +2948,20 @@ const scope = { crypto: globalThis.crypto };
       return values;
     };
 
-    const activityIndex = new Map(activities.map(({ key }, index) => [key, index]));
-    const milestoneIndex = new Map(milestones.map(({ key }, index) => [key, index]));
+    // Activities, then milestones, then periods: the order dependencies count.
+    const recordIndex = new Map(
+      [...activities, ...milestones, ...periods].map(({ key }, index) => [key, index]),
+    );
     // `@a1,a4,s2,a1:50`: predecessor indices and their start-after shares.
-    const dependenciesOf = (list, where, allowMilestones) => {
+    const dependenciesOf = (list, where) => {
       const indices = [];
       const shares = [];
       for (const part of list.split(',')) {
         const [key, share] = part.trim().split(':');
         if (!key) continue;
-        let index = activityIndex.get(key);
-        if (index === undefined && allowMilestones && milestoneIndex.has(key))
-          index = activities.length + milestoneIndex.get(key);
+        const index = recordIndex.get(key);
         if (index === undefined) {
-          note(
-            where,
-            `the dependency ${key} names no ${allowMilestones ? 'record' : 'activity'}; it was removed`,
-          );
+          note(where, `the dependency ${key} names no record; it was removed`);
           continue;
         }
         indices.push(index);
@@ -2788,26 +2971,22 @@ const scope = { crypto: globalThis.crypto };
       return [indices, shares];
     };
 
-    // Periods: `title/start/days`, a vacation unless `work` follows.
+    // Periods: `title/start/days`, time off such as a vacation.
     payload.p = periods.map(({ key, value }) => {
       const [title = '', start = '', days = '', ...rest] = value.split('/');
-      const work = rest.includes('work');
       for (const field of rest)
-        if (field && field !== 'work')
-          note(key, `${JSON.stringify(field)} is not a period field and was ignored`);
+        if (field) note(key, `${JSON.stringify(field)} is not a period field and was ignored`);
       return [
         text(title),
         dayOf(start, key, 'start') ?? 0,
         (daysOf(days, key) ?? 1) - 1,
         PERIOD_COLOR,
-        work ? 0 : 1,
+        1,
       ];
     });
     // The days after an activity's start to its end: calendar days, or with
-    // `w` work days, skipping weekends and vacation periods.
-    const vacations = payload.p
-      .filter((period) => period[4] === 1)
-      .map(([, start, length]) => [start, start + length]);
+    // `w` work days, skipping weekends and periods.
+    const vacations = payload.p.map(([, start, length]) => [start, start + length]);
     const lengthOf = (first, days) => {
       if (!payload.w) return days - 1;
       const working = (offset) => {
@@ -2838,7 +3017,7 @@ const scope = { crypto: globalThis.crypto };
       for (const field of rest) {
         if (!field) continue;
         if (field.startsWith('d=')) description = text(field.slice(2));
-        else if (field.startsWith('@')) dependencies = dependenciesOf(field.slice(1), where, true);
+        else if (field.startsWith('@')) dependencies = dependenciesOf(field.slice(1), where);
         else if (/^\d+p$/.test(field)) progress = Number(field.slice(0, -1));
         // As people write it by hand.
         else if (/^\d+(%|%25)$/.test(field)) progress = Number(field.replace(/%.*/, ''));
@@ -2857,18 +3036,18 @@ const scope = { crypto: globalThis.crypto };
         dependencies[1],
       ];
     });
-    // Milestones: `title/date`, then `@dependencies` or `fixed`.
+    // Milestones: `title/date`, `-` for none, then `@dependencies` and `fixed`.
     payload.s = milestones.map(({ key, value }) => {
       const [title = '', date = '', ...rest] = value.split('/');
       let dependsOn = [];
       let fixed = 0;
       for (const field of rest) {
         if (field === 'fixed') fixed = 1;
-        else if (field.startsWith('@')) [dependsOn] = dependenciesOf(field.slice(1), key, false);
+        else if (field.startsWith('@')) [dependsOn] = dependenciesOf(field.slice(1), key);
         else if (field)
           note(key, `${JSON.stringify(field)} is not a milestone field and was ignored`);
       }
-      return [text(title), dayOf(date, key, 'date') ?? 0, dependsOn, fixed];
+      return [text(title), date === '-' ? null : (dayOf(date, key, 'date') ?? 0), dependsOn, fixed];
     });
     for (const key of ['i', 's', 'p']) if (!payload[key].length) delete payload[key];
 
@@ -2965,7 +3144,7 @@ const scope = { crypto: globalThis.crypto };
       keys: {
         items: activities.map(({ key }) => key),
         milestones: milestones.map(({ key }) => key),
-        periodIndicators: periods.map(({ key }) => key),
+        periods: periods.map(({ key }) => key),
       },
     };
   }
@@ -3003,9 +3182,7 @@ const scope = { crypto: globalThis.crypto };
     const items = payload.i || [];
     const milestones = payload.s || [];
     const periods = payload.p || [];
-    const vacations = periods
-      .filter((period) => (period[4] ?? 1) === 1)
-      .map(([, start, length]) => [start, start + length]);
+    const vacations = periods.map(([, start, length]) => [start, start + length]);
     const working = (offset) => {
       const weekday = new Date((base + offset) * DAY).getUTCDay();
       return (
@@ -3026,7 +3203,11 @@ const scope = { crypto: globalThis.crypto };
         ([, options], other) => other !== index && options.some(([choice]) => choice === option),
       );
     const keyOf = (index) =>
-      index < items.length ? `a${index + 1}` : `s${index - items.length + 1}`;
+      index < items.length
+        ? `a${index + 1}`
+        : index < items.length + milestones.length
+          ? `s${index - items.length + 1}`
+          : `p${index - items.length - milestones.length + 1}`;
     const records = ['t=1', `n=${field(payload.n)}`];
     if (payload.d) records.push(`d=${field(payload.d)}`);
     records.push(`y=${year}`);
@@ -3082,15 +3263,13 @@ const scope = { crypto: globalThis.crypto };
       },
     );
     milestones.forEach(([title, day, dependsOn = [], fixed = 0], index) => {
-      const fields = [field(title), date(day)];
+      const fields = [field(title), day === null ? '-' : date(day)];
       if (fixed === 1) fields.push('fixed');
-      else if (dependsOn.length) fields.push(`@${dependsOn.map(keyOf).join(',')}`);
+      if (dependsOn.length) fields.push(`@${dependsOn.map(keyOf).join(',')}`);
       records.push(`s${index + 1}=${fields.join('/')}`);
     });
-    periods.forEach(([title, start, length, , vacation = 1], index) =>
-      records.push(
-        `p${index + 1}=${field(title)}/${date(start)}/${length + 1}${vacation === 1 ? '' : '/work'}`,
-      ),
+    periods.forEach(([title, start, length], index) =>
+      records.push(`p${index + 1}=${field(title)}/${date(start)}/${length + 1}`),
     );
     if (payload.o) {
       const view = payload.o;
@@ -3130,9 +3309,7 @@ const scope = { crypto: globalThis.crypto };
     return String(message).replace(
       /\b(?:activity|milestone|period) ([isp])\[(\d+)\]/g,
       (whole, list, index) => {
-        const key = { i: keys.items, s: keys.milestones, p: keys.periodIndicators }[list][
-          Number(index)
-        ];
+        const key = { i: keys.items, s: keys.milestones, p: keys.periods }[list][Number(index)];
         return key ?? whole;
       },
     );
@@ -3154,6 +3331,8 @@ const scope = { crypto: globalThis.crypto };
   'use strict';
 
   const VERSION = 1;
+  // The band color a period's packed form carries, for older readers.
+  const PERIOD_COLOR = '9aa7b5';
   // The whole link stays within 2,000 characters for any Tidigar origin and
   // path of up to 100 characters.
   const MAX_FRAGMENT_LENGTH = 1900;
@@ -3566,11 +3745,14 @@ const scope = { crypto: globalThis.crypto };
           optionIndex.set(option.id, [index, position]),
         );
       });
-      // Dependency indexes count the items first, then the milestones.
-      const itemIndex = new Map([
-        ...project.items.map((item, index) => [item.id, index]),
-        ...project.milestones.map((point, index) => [point.id, project.items.length + index]),
-      ]);
+      // A link lists activities, then milestones, then periods; dependency
+      // indexes count them in that order.
+      const activities = model.records(project, 'activity');
+      const milestones = model.records(project, 'milestone');
+      const periods = model.records(project, 'period');
+      const itemIndex = new Map(
+        [...activities, ...milestones, ...periods].map((record, index) => [record.id, index]),
+      );
       const dependencies = (ids) => ids.map((id) => itemIndex.get(id));
       const defaults = model.normalizeViews(
         [{ id: model.uuid(), projectId: manifest.projectId, name: '-' }],
@@ -3623,8 +3805,8 @@ const scope = { crypto: globalThis.crypto };
           dimension.name,
           dimension.options.map((choice) => [choice.name, choice.color.slice(1)]),
         ]);
-      if (project.items.length)
-        payload.i = project.items.map((item) =>
+      if (activities.length)
+        payload.i = activities.map((item) =>
           trimTail(
             [
               item.title,
@@ -3643,30 +3825,43 @@ const scope = { crypto: globalThis.crypto };
             [null, null, null, '', 0, [], [], [], ''],
           ),
         );
-      if (project.milestones.length)
-        payload.s = project.milestones.map((milestone) =>
+      if (milestones.length)
+        payload.s = milestones.map((milestone) =>
           trimTail(
             [
               milestone.title,
-              at(milestone.date),
+              milestone.start === undefined ? null : at(milestone.start),
               dependencies(milestone.dependsOn),
               milestone.fixed ? 1 : 0,
               milestone.ref ?? '',
+              milestone.description,
+              milestone.progress,
+              trimZeros(
+                manifest.dimensions.map((dimension) => option(milestone.values[dimension.id])),
+              ),
             ],
-            [null, null, [], 0, ''],
+            [null, null, [], 0, '', '', 0, []],
           ),
         );
-      if (project.periodIndicators.length)
-        payload.p = project.periodIndicators.map((period) =>
+      // A period's fourth and fifth places held a color and whether it was
+      // a vacation; every period is now time off with its values' color, so
+      // they are written as the band color and 1 and not read.
+      if (periods.length)
+        payload.p = periods.map((period) =>
           trimTail(
             [
               period.title,
               day(period.start),
               day(period.end) - day(period.start),
-              period.color.slice(1),
-              period.vacation ? 1 : 0,
+              PERIOD_COLOR,
+              1,
+              period.ref ?? '',
+              period.description,
+              trimZeros(
+                manifest.dimensions.map((dimension) => option(period.values[dimension.id])),
+              ),
             ],
-            [null, null, null, null, 1],
+            [null, null, null, null, 1, '', '', []],
           ),
         );
       if (project.sharedViews.length)
@@ -3690,16 +3885,16 @@ const scope = { crypto: globalThis.crypto };
           ? `${key}[${index}] ${JSON.stringify(title.length > 40 ? `${title.slice(0, 40)}…` : title)}`
           : `${key}[${index}]`;
       const names = new Map([[raw.manifest.projectId, 'the roadmap']]);
-      const lists = {
-        items: ['activity', 'i', (record) => record.title],
-        milestones: ['milestone', 's', (record) => record.title],
-        periodIndicators: ['period', 'p', (record) => record.title],
-        sharedViews: ['view', 'v', (record) => record.name],
-      };
-      for (const [field, [kind, key, title]] of Object.entries(lists))
-        raw[field].forEach((record, index) =>
-          names.set(record.id, `${kind} ${label(key, index, title(record))}`),
-        );
+      const keys = { activity: 'i', milestone: 's', period: 'p' };
+      for (const kind of model.recordKinds)
+        model
+          .records(raw, kind)
+          .forEach((record, index) =>
+            names.set(record.id, `${kind} ${label(keys[kind], index, record.title)}`),
+          );
+      raw.sharedViews.forEach((record, index) =>
+        names.set(record.id, `view ${label('v', index, record.name)}`),
+      );
       raw.manifest.dimensions.forEach((dimension, index) => {
         names.set(dimension.id, `dimension ${label('m', index, dimension.name)}`);
         dimension.options.forEach((choice, position) =>
@@ -3715,15 +3910,12 @@ const scope = { crypto: globalThis.crypto };
         if (error instanceof ShareLinkError) throw error;
         const names = positionNames(raw);
         const message = String(error.message)
-          .replace(
-            /\b(items|milestones|periodIndicators|sharedViews)\[(\d+)\]/g,
-            (text, field, index) => {
-              if (initialView && field === 'sharedViews') return 'initial view o';
-              const record = raw[field][Number(index)];
-              return record ? names.get(record.id) : text;
-            },
-          )
-          .replace(/\b(?:items|milestones|periodIndicators|sharedViews)\.([0-9a-f-]{36})/gi, '$1')
+          .replace(/\b(items|sharedViews)\[(\d+)\]/g, (text, field, index) => {
+            if (initialView && field === 'sharedViews') return 'initial view o';
+            const record = raw[field][Number(index)];
+            return record ? names.get(record.id) : text;
+          })
+          .replace(/\b(?:items|sharedViews)\.([0-9a-f-]{36})/gi, '$1')
           .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (id) =>
             names.has(id) ? names.get(id) : id,
           );
@@ -3806,11 +3998,27 @@ const scope = { crypto: globalThis.crypto };
       const option = (dimension, choice) =>
         integer(choice) === 0 ? '' : at(dimension.options, choice - 1).id;
       const packedItems = list(payload.i).map(list);
-      const itemIds = packedItems.map((_, index) => id(like?.items[index]));
-      const milestoneIds = list(payload.s).map((_, index) => id(like?.milestones[index]));
-      const dependencies = (value) => list(value).map((index) => at(itemIds, index));
-      // An activity may also wait for a milestone, counted after the items.
-      const predecessors = [...itemIds, ...milestoneIds];
+      // A newer link of the same roadmap keeps each kind's IDs in order.
+      const earlier = (kind, index) => like && model.records(like, kind)[index];
+      const itemIds = packedItems.map((_, index) => id(earlier('activity', index)));
+      const milestoneIds = list(payload.s).map((_, index) => id(earlier('milestone', index)));
+      const periodIds = list(payload.p).map((_, index) => id(earlier('period', index)));
+      // Activities, milestones and periods in this order, as dependencies count them.
+      const predecessors = [...itemIds, ...milestoneIds, ...periodIds];
+      const dependencies = (value) => list(value).map((index) => at(predecessors, index));
+      const valuesOf = (value) => {
+        const choices = list(value);
+        if (choices.length > dimensions.length)
+          fail('invalid', 'The share link refers to a missing entry.');
+        return Object.fromEntries(
+          choices
+            .map((choice, position) => [
+              dimensions[position].id,
+              option(dimensions[position], choice),
+            ])
+            .filter(([, id]) => id),
+        );
+      };
 
       const objectValue = (value) => {
         if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -3856,7 +4064,7 @@ const scope = { crypto: globalThis.crypto };
       const raw = {
         manifest: {
           projectId,
-          formatVersion: 1,
+          formatVersion: model.formatVersion,
           ...(payload.z === undefined ? {} : { timeZone: payload.z }),
           ...(payload.h === undefined ? {} : { nightHours: payload.h }),
           ...(payload.c === undefined ? {} : { shareLinkCreatedAt: payload.c }),
@@ -3867,84 +4075,100 @@ const scope = { crypto: globalThis.crypto };
           schedule: payload.w === undefined ? 'calendar-days' : payload.w === 1 ? 'work-days' : '',
           ...(payload.r === undefined ? {} : { refPrefix: payload.r }),
         },
-        items: packedItems.map((entry, index) => {
-          const [
-            title,
-            start,
-            length,
-            description = '',
-            progress = 0,
-            values,
-            dependsOn,
-            parts,
-            ref = '',
-          ] = entry;
-          const choices = list(values);
-          const predecessorIds = list(dependsOn).map((position) => at(predecessors, position));
-          const shares = list(parts);
-          if (shares.length > predecessorIds.length)
-            fail('invalid', 'The share link refers to a missing entry.');
-          const startAfter = Object.fromEntries(
-            shares
-              .map((share, position) => [predecessorIds[position], share])
-              .filter(([, share]) => share !== 100),
-          );
-          if (choices.length > dimensions.length)
-            fail('invalid', 'The share link refers to a missing entry.');
-          return {
-            id: itemIds[index],
-            projectId,
-            title,
-            description,
-            progress,
-            ...(start === null && length === null
-              ? {}
-              : { start: time(start), end: until(start, length) }),
-            values: Object.fromEntries(
-              choices
-                .map((choice, position) => [
-                  dimensions[position].id,
-                  option(dimensions[position], choice),
-                ])
-                .filter(([, id]) => id),
-            ),
-            dependsOn: predecessorIds,
-            ...(Object.keys(startAfter).length ? { startAfter } : {}),
-            ...(ref === '' ? {} : { ref }),
-          };
-        }),
+        items: [
+          ...packedItems.map((entry, index) => {
+            const [
+              title,
+              start,
+              length,
+              description = '',
+              progress = 0,
+              values,
+              dependsOn,
+              parts,
+              ref = '',
+            ] = entry;
+            const choices = list(values);
+            const predecessorIds = list(dependsOn).map((position) => at(predecessors, position));
+            const shares = list(parts);
+            if (shares.length > predecessorIds.length)
+              fail('invalid', 'The share link refers to a missing entry.');
+            const startAfter = Object.fromEntries(
+              shares
+                .map((share, position) => [predecessorIds[position], share])
+                .filter(([, share]) => share !== 100),
+            );
+            if (choices.length > dimensions.length)
+              fail('invalid', 'The share link refers to a missing entry.');
+            return {
+              id: itemIds[index],
+              projectId,
+              title,
+              description,
+              progress,
+              ...(start === null && length === null
+                ? {}
+                : { start: time(start), end: until(start, length) }),
+              values: Object.fromEntries(
+                choices
+                  .map((choice, position) => [
+                    dimensions[position].id,
+                    option(dimensions[position], choice),
+                  ])
+                  .filter(([, id]) => id),
+              ),
+              dependsOn: predecessorIds,
+              ...(Object.keys(startAfter).length ? { startAfter } : {}),
+              ...(ref === '' ? {} : { ref }),
+            };
+          }),
+          ...list(payload.s).map((entry, index) => {
+            const [
+              title,
+              day,
+              dependsOn,
+              fixed = 0,
+              ref = '',
+              description = '',
+              progress = 0,
+              values,
+            ] = list(entry);
+            if (fixed !== 0 && fixed !== 1)
+              fail('invalid', 'The share link has an invalid milestone.');
+            return {
+              id: milestoneIds[index],
+              projectId,
+              type: 'milestone',
+              title,
+              description,
+              progress,
+              ...(day === null || day === undefined ? {} : { start: time(day) }),
+              values: valuesOf(values),
+              dependsOn: dependencies(dependsOn),
+              ...(fixed === 1 ? { fixed: true } : {}),
+              ...(ref === '' ? {} : { ref }),
+            };
+          }),
+          ...list(payload.p).map((entry, index) => {
+            const [title, start, length, , off = 1, ref = '', description = '', values] =
+              list(entry);
+            if (off !== 0 && off !== 1) fail('invalid', 'The share link has an invalid period.');
+            return {
+              id: periodIds[index],
+              projectId,
+              type: 'period',
+              title,
+              description,
+              start: date(start),
+              end: date(integer(start) + integer(length)),
+              values: valuesOf(values),
+              ...(ref === '' ? {} : { ref }),
+            };
+          }),
+        ],
         sharedViews: list(payload.v).map((packed, index) =>
           own({ ...unpackView(packed), name: packed.name }, like?.sharedViews[index]),
         ),
-        milestones: list(payload.s).map((entry, index) => {
-          const [title, day, dependsOn, fixed = 0, ref = ''] = list(entry);
-          if (fixed !== 0 && fixed !== 1)
-            fail('invalid', 'The share link has an invalid milestone.');
-          return {
-            id: milestoneIds[index],
-            projectId,
-            title,
-            date: time(day),
-            dependsOn: dependencies(dependsOn),
-            fixed: fixed === 1,
-            ...(ref === '' ? {} : { ref }),
-          };
-        }),
-        periodIndicators: list(payload.p).map((entry, index) => {
-          const [title, start, length, periodColor, vacation = 1] = list(entry);
-          if (vacation !== 0 && vacation !== 1)
-            fail('invalid', 'The share link has an invalid period.');
-          return own(
-            {
-              title,
-              start: date(start),
-              end: date(integer(start) + integer(length)),
-              color: color(periodColor),
-              vacation: vacation === 1,
-            },
-            like?.periodIndicators[index],
-          );
-        }),
       };
       let repairs = [];
       const project = inPositions(raw, () => {
@@ -4003,13 +4227,14 @@ const scope = { crypto: globalThis.crypto };
       const project = JSON.parse(JSON.stringify(source));
       let view = initialView ? JSON.parse(JSON.stringify(initialView)) : null;
       if (options.visibleItemIds) {
-        // Milestones stay, so activities keep waiting for fixed ones.
+        // Milestones and periods stay; only activities are chosen.
         const kept = new Set([
           ...options.visibleItemIds,
-          ...project.milestones.filter((point) => point.fixed).map((point) => point.id),
+          ...project.items.filter((item) => item.type).map((item) => item.id),
         ]);
         project.items = project.items.filter((item) => kept.has(item.id));
-        for (const record of [...project.items, ...project.milestones]) {
+        for (const record of project.items) {
+          if (!record.dependsOn) continue;
           record.dependsOn = record.dependsOn.filter((id) => kept.has(id));
           if (!record.startAfter) continue;
           for (const id of Object.keys(record.startAfter))
@@ -4023,7 +4248,7 @@ const scope = { crypto: globalThis.crypto };
       }
       if (options.withoutSavedViews) project.sharedViews = [];
       if (options.withoutUnusedDimensions) {
-        const used = new Set(project.items.flatMap((item) => Object.values(item.values)));
+        const used = new Set(project.items.flatMap((item) => Object.values(item.values || {})));
         const dimensions = project.manifest.dimensions
           .map((dimension) => ({
             ...dimension,
@@ -4035,7 +4260,7 @@ const scope = { crypto: globalThis.crypto };
           dimensions.flatMap((dimension) => dimension.options.map((choice) => choice.id)),
         );
         project.manifest.dimensions = dimensions;
-        for (const item of project.items)
+        for (const item of project.items.filter((record) => record.values))
           item.values = Object.fromEntries(
             Object.entries(item.values).filter(([id, choice]) => dimensionIds.has(id) && choice),
           );
@@ -4100,7 +4325,10 @@ const scope = { crypto: globalThis.crypto };
       if (!chosen) return null;
       const shown = model.activityMatcher(chosen, source.manifest.dimensions, locale);
       const { project } = reduce(source, null, {
-        visibleItemIds: source.items.filter(shown).map((item) => item.id),
+        visibleItemIds: model
+          .records(source, 'activity')
+          .filter(shown)
+          .map((item) => item.id),
         withoutDescriptions: true,
       });
       const view = { ...chosen, filters: {}, query: '' };
@@ -4110,7 +4338,7 @@ const scope = { crypto: globalThis.crypto };
       project.manifest.dimensions = project.manifest.dimensions.filter((dimension) =>
         used.has(dimension.id),
       );
-      for (const item of project.items)
+      for (const item of project.items.filter((record) => record.values))
         item.values = Object.fromEntries(
           Object.entries(item.values).filter(([id]) => used.has(id)),
         );
@@ -4127,7 +4355,7 @@ const scope = { crypto: globalThis.crypto };
       delete project.manifest.shareLinkCreatedAt;
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
-        for (const record of [...project.items, ...project.milestones]) delete record.ref;
+        for (const record of project.items) delete record.ref;
       }
       project.sharedViews = [view];
       const snapshot = model.normalizeProject(project);
@@ -4501,8 +4729,8 @@ const scope = { crypto: globalThis.crypto };
       'dependsOn',
       'startAfter',
     ],
-    milestone: ['title', 'date', 'dependsOn', 'fixed'],
-    period: ['title', 'start', 'end', 'color', 'vacation'],
+    milestone: ['title', 'start', 'values', 'dependsOn', 'fixed'],
+    period: ['title', 'start', 'end', 'values'],
     option: ['name', 'color'],
     view: Object.keys(VIEW_FIELDS),
   };
@@ -4608,54 +4836,48 @@ const scope = { crypto: globalThis.crypto };
     const activities = list(plan.activities, 'activities').map((activity, index) =>
       record(activity, named(`activities[${index}]`, activity?.title), 'activity'),
     );
-    const titles = new Map();
-    activities.forEach((activity, index) => {
-      if (typeof activity.title !== 'string') return;
-      titles.set(activity.title, titles.has(activity.title) ? -1 : index);
+    // Any activity or milestone may wait for any activity, milestone or
+    // period, named by its title or by its index in the link, which counts
+    // the activities, then the milestones, then the periods. A title is
+    // looked up among the activities first, then the milestones, then the
+    // periods.
+    const kinds = [
+      ['activities', activities],
+      ['milestones', list(plan.milestones, 'milestones')],
+      ['periods', list(plan.periods, 'periods')],
+    ];
+    const total = kinds.reduce((sum, [, records]) => sum + records.length, 0);
+    const titles = kinds.map(([kind, records], position) => {
+      const offset = kinds.slice(0, position).reduce((sum, [, before]) => sum + before.length, 0);
+      const found = new Map();
+      records.forEach((entry, index) => {
+        if (typeof entry?.title !== 'string') return;
+        found.set(entry.title, found.has(entry.title) ? -1 : offset + index);
+      });
+      return [kind, found];
     });
-    // An activity may also wait for a fixed milestone, named by its
-    // title; in the link it counts after the activities.
-    const fixed = new Map();
-    list(plan.milestones, 'milestones').forEach((milestone, index) => {
-      if (milestone?.fixed !== true || typeof milestone.title !== 'string') return;
-      fixed.set(milestone.title, fixed.has(milestone.title) ? -1 : index);
-    });
-    const dependencies = (value, path, milestones = false) =>
+    const dependencies = (value, path) =>
       list(value, path).map((reference, position) => {
         const at = `${path}[${position}]`;
         if (Number.isInteger(reference)) {
-          if (reference < 0 || reference >= activities.length)
-            fail(at, `there is no activities[${reference}]`);
+          if (reference < 0 || reference >= total) fail(at, `there is no record ${reference}`);
           return reference;
         }
-        if (typeof reference !== 'string') fail(at, 'expected an activity title or index');
-        const found = titles.get(reference);
-        if (found === undefined && milestones && fixed.has(reference)) {
-          if (fixed.get(reference) < 0)
-            fail(at, `several fixed milestones are titled ${JSON.stringify(reference)}`);
-          return activities.length + fixed.get(reference);
-        }
-        if (found === undefined)
-          fail(
-            at,
-            `no activity${milestones && fixed.size ? ' or fixed milestone' : ''} is titled ${JSON.stringify(reference)}`,
-          );
-        if (found < 0)
-          fail(at, `several activities are titled ${JSON.stringify(reference)}; use an index`);
-        return found;
+        if (typeof reference !== 'string') fail(at, 'expected a title or an index');
+        const [kind, found] = titles.find(([, named]) => named.has(reference)) || [];
+        if (!kind)
+          fail(at, `no activity, milestone or period is titled ${JSON.stringify(reference)}`);
+        if (found.get(reference) < 0)
+          fail(at, `several ${kind} are titled ${JSON.stringify(reference)}; use an index`);
+        return found.get(reference);
       });
 
-    const dated = [];
-    const items = activities.map((activity, index) => {
-      const path = named(`activities[${index}]`, activity.title);
-      const start = date(activity.start, `${path}.start`);
-      const end = activity.end === undefined ? start : date(activity.end, `${path}.end`);
-      if (end < start) fail(`${path}.end`, 'must not be before start');
-      dated.push(start, end);
+    // A record's values: each dimension's option number, 0 for none.
+    const valuesOf = (record, path) => {
       const values = [];
-      if (activity.values !== undefined) {
-        if (!isRecord(activity.values)) fail(`${path}.values`, 'expected dimension → option');
-        for (const [dimensionName, optionName] of Object.entries(activity.values)) {
+      if (record.values !== undefined) {
+        if (!isRecord(record.values)) fail(`${path}.values`, 'expected dimension → option');
+        for (const [dimensionName, optionName] of Object.entries(record.values)) {
           const at = `${path}.values.${JSON.stringify(dimensionName)}`;
           const dimension = dimensionNamed(dimensionName, at);
           if (optionName === null || optionName === '') continue;
@@ -4668,7 +4890,23 @@ const scope = { crypto: globalThis.crypto };
           values[dimensions.indexOf(dimension)] = position + 1;
         }
       }
-      const dependsOn = dependencies(activity.dependsOn, `${path}.dependsOn`, true);
+      return Array.from(values, (value) => value ?? 0);
+    };
+    const packedValues = (values) => {
+      const packed = values.slice();
+      while (packed.length && packed.at(-1) === 0) packed.pop();
+      return packed;
+    };
+
+    const dated = [];
+    const items = activities.map((activity, index) => {
+      const path = named(`activities[${index}]`, activity.title);
+      const start = date(activity.start, `${path}.start`);
+      const end = activity.end === undefined ? start : date(activity.end, `${path}.end`);
+      if (end < start) fail(`${path}.end`, 'must not be before start');
+      dated.push(start, end);
+      const values = valuesOf(activity, path);
+      const dependsOn = dependencies(activity.dependsOn, `${path}.dependsOn`);
       const startAfter = list(activity.startAfter, `${path}.startAfter`).slice();
       if (startAfter.length > dependsOn.length)
         fail(`${path}.startAfter`, 'must not have more entries than dependsOn');
@@ -4676,7 +4914,7 @@ const scope = { crypto: globalThis.crypto };
         if (![0, 25, 50, 75, 100].includes(share))
           fail(`${path}.startAfter[${position}]`, 'must be one of 0, 25, 50, 75, or 100');
         if (share !== 100 && dependsOn[position] >= activities.length)
-          fail(`${path}.startAfter[${position}]`, 'a fixed milestone requires 100');
+          fail(`${path}.startAfter[${position}]`, 'a milestone or a period requires 100');
       });
       while (startAfter.at(-1) === 100) startAfter.pop();
       return {
@@ -4685,7 +4923,7 @@ const scope = { crypto: globalThis.crypto };
         length: end - start,
         description: text(activity.description, `${path}.description`, ''),
         progress: activity.progress ?? 0,
-        values: Array.from(values, (value) => value ?? 0),
+        values,
         dependsOn,
         startAfter,
       };
@@ -4693,15 +4931,14 @@ const scope = { crypto: globalThis.crypto };
     const milestones = list(plan.milestones, 'milestones').map((milestone, index) => {
       const path = named(`milestones[${index}]`, milestone?.title);
       record(milestone, path, 'milestone');
-      const day = date(milestone.date, `${path}.date`);
+      const day = date(milestone.start, `${path}.start`);
       dated.push(day);
       if (milestone.fixed !== undefined && typeof milestone.fixed !== 'boolean')
         fail(`${path}.fixed`, 'expected true or false');
-      if (milestone.fixed && list(milestone.dependsOn, `${path}.dependsOn`).length)
-        fail(`${path}.dependsOn`, 'a fixed milestone waits for nothing');
       return {
         title: text(milestone.title, `${path}.title`),
         day,
+        values: valuesOf(milestone, path),
         dependsOn: dependencies(milestone.dependsOn, `${path}.dependsOn`),
         fixed: milestone.fixed === true,
       };
@@ -4712,15 +4949,12 @@ const scope = { crypto: globalThis.crypto };
       const start = date(period.start, `${path}.start`);
       const end = period.end === undefined ? start : date(period.end, `${path}.end`);
       if (end < start) fail(`${path}.end`, 'must not be before start');
-      if (period.vacation !== undefined && typeof period.vacation !== 'boolean')
-        fail(`${path}.vacation`, 'expected true or false');
       dated.push(start, end);
       return {
         title: text(period.title, `${path}.title`),
         start,
         length: end - start,
-        color: period.color === undefined ? PERIOD_COLOR : color(period.color, `${path}.color`),
-        vacation: period.vacation !== false,
+        values: valuesOf(period, path),
       };
     });
     if (plan.workDays !== undefined && typeof plan.workDays !== 'boolean')
@@ -4749,35 +4983,53 @@ const scope = { crypto: globalThis.crypto };
         dimension.options.map((option) => [option.name, option.color]),
       ]);
     if (items.length)
-      payload.i = items.map((item) => {
-        const values = item.values.slice();
-        while (values.length && values.at(-1) === 0) values.pop();
-        return trim(
+      payload.i = items.map((item) =>
+        trim(
           [
             item.title,
             item.start - base,
             item.length,
             item.description,
             item.progress,
-            values,
+            packedValues(item.values),
             item.dependsOn,
             item.startAfter,
           ],
           [null, null, null, '', 0, [], [], []],
-        );
-      });
+        ),
+      );
     if (milestones.length)
       payload.s = milestones.map((milestone) =>
         trim(
-          [milestone.title, milestone.day - base, milestone.dependsOn, milestone.fixed ? 1 : 0],
-          [null, null, [], 0],
+          [
+            milestone.title,
+            milestone.day - base,
+            milestone.dependsOn,
+            milestone.fixed ? 1 : 0,
+            '',
+            '',
+            0,
+            packedValues(milestone.values),
+          ],
+          [null, null, [], 0, '', '', 0, []],
         ),
       );
     if (periods.length)
       payload.p = periods.map((period) =>
         trim(
-          [period.title, period.start - base, period.length, period.color, period.vacation ? 1 : 0],
-          [null, null, null, null, 1],
+          // The fourth and fifth places are not read: every period is time
+          // off, colored by its values.
+          [
+            period.title,
+            period.start - base,
+            period.length,
+            PERIOD_COLOR,
+            1,
+            '',
+            '',
+            packedValues(period.values),
+          ],
+          [null, null, null, null, 1, '', '', []],
         ),
       );
 
@@ -4837,13 +5089,31 @@ const scope = { crypto: globalThis.crypto };
     const day = (offset) => isoDate(base + offset);
     const dimensions = (payload.m || []).map(([name, options]) => ({ name, options }));
     const items = payload.i || [];
-    const counts = new Map();
-    for (const [title = ''] of items) counts.set(title, (counts.get(title) || 0) + 1);
+    // Option numbers as dimension name → option name, or null for none.
+    const valuesOf = (values) => {
+      const chosen = values
+        .map((choice, index) => [dimensions[index], choice])
+        .filter(([, choice]) => choice > 0);
+      return chosen.length
+        ? Object.fromEntries(
+            chosen.map(([dimension, choice]) => [dimension.name, dimension.options[choice - 1][0]]),
+          )
+        : null;
+    };
+    // A predecessor by its title where that finds it again, else by index.
+    const records = [...items, ...(payload.s || []), ...(payload.p || [])];
+    const kindAt = (index) =>
+      index < items.length ? 0 : index < items.length + (payload.s || []).length ? 1 : 2;
+    // Other records may share the title only in a kind looked up later.
     const reference = (index) => {
-      // Past the activities, an index is a fixed milestone, named by title.
-      if (index >= items.length) return payload.s[index - items.length][0];
-      const title = items[index][0] ?? '';
-      return title && counts.get(title) === 1 ? title : index;
+      const title = records[index][0] ?? '';
+      return title &&
+        records.every(
+          (entry, position) =>
+            position === index || (entry[0] ?? '') !== title || kindAt(position) > kindAt(index),
+        )
+        ? title
+        : index;
     };
     const plan = { $schema: SCHEMA, version: 1, name: payload.n };
     if (payload.d) plan.description = payload.d;
@@ -4874,33 +5144,29 @@ const scope = { crypto: globalThis.crypto };
           const activity = { title, start: day(start), end: day(start + length) };
           if (description) activity.description = description;
           if (progress) activity.progress = progress;
-          const chosen = values
-            .map((choice, index) => [dimensions[index], choice])
-            .filter(([, choice]) => choice > 0);
-          if (chosen.length)
-            activity.values = Object.fromEntries(
-              chosen.map(([dimension, choice]) => [
-                dimension.name,
-                dimension.options[choice - 1][0],
-              ]),
-            );
+          const chosen = valuesOf(values);
+          if (chosen) activity.values = chosen;
           if (dependsOn.length) activity.dependsOn = dependsOn.map(reference);
           if (startAfter.length) activity.startAfter = startAfter.slice();
           return activity;
         },
       );
     if (payload.s?.length)
-      plan.milestones = payload.s.map(([title, date, dependsOn = [], fixed = 0]) => {
-        const milestone = { title, date: day(date) };
-        if (dependsOn.length) milestone.dependsOn = dependsOn.map(reference);
-        if (fixed === 1) milestone.fixed = true;
-        return milestone;
-      });
+      plan.milestones = payload.s.map(
+        ([title, start, dependsOn = [], fixed = 0, , , , values = []]) => {
+          const milestone = { title, start: day(start) };
+          const chosen = valuesOf(values);
+          if (chosen) milestone.values = chosen;
+          if (dependsOn.length) milestone.dependsOn = dependsOn.map(reference);
+          if (fixed === 1) milestone.fixed = true;
+          return milestone;
+        },
+      );
     if (payload.p?.length)
-      plan.periods = payload.p.map(([title, start, length, color, vacation = 1]) => {
+      plan.periods = payload.p.map(([title, start, length, , , , , values = []]) => {
         const period = { title, start: day(start), end: day(start + length) };
-        if (color !== PERIOD_COLOR) period.color = `#${color}`;
-        if (vacation === 0) period.vacation = false;
+        const chosen = valuesOf(values);
+        if (chosen) period.values = chosen;
         return period;
       });
     const lost = payload.v?.length ? ['saved views'] : [];
@@ -4951,9 +5217,14 @@ const scope = { crypto: globalThis.crypto };
     project,
     labels = { i: 'activities', s: 'milestones', p: 'periods', v: 'views' },
   ) {
+    const kinds = (type) => project.items.filter((item) => (item.type || 'activity') === type);
+    const items = kinds('activity');
+    const milestones = kinds('milestone');
+    const periods = kinds('period');
     const position = new Map();
-    project.items.forEach((item, index) => position.set(item.id, `${labels.i}[${index}]`));
-    project.milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
+    items.forEach((item, index) => position.set(item.id, `${labels.i}[${index}]`));
+    milestones.forEach((point, index) => position.set(point.id, `${labels.s}[${index}]`));
+    periods.forEach((period, index) => position.set(period.id, `${labels.p}[${index}]`));
     const after = (record) =>
       record.dependsOn.length
         ? ` · after ${record.dependsOn.map((id) => position.get(id) + (record.startAfter?.[id] === undefined ? '' : ` (${record.startAfter[id]}%)`)).join(', ')}`
@@ -4967,7 +5238,7 @@ const scope = { crypto: globalThis.crypto };
           return choice ? ` · ${dimension.name}: ${choice.name}` : '';
         })
         .join('');
-    const { manifest, items, milestones, periodIndicators, sharedViews } = project;
+    const { manifest, sharedViews } = project;
     return [
       `${manifest.name} (${manifest.year}${manifest.schedule === 'work-days' ? ', work days' : ''})`,
       ...items.map(
@@ -4977,11 +5248,12 @@ const scope = { crypto: globalThis.crypto };
       ),
       ...milestones.map(
         (milestone, index) =>
-          `${labels.s}[${index}] ${milestone.title}: ${milestone.date}` +
-          `${milestone.fixed ? ' · fixed' : ''}${after(milestone)}`,
+          `${labels.s}[${index}] ${milestone.title}: ${milestone.start ?? 'undated'}` +
+          `${milestone.fixed ? ' · fixed' : ''}${values(milestone)}${after(milestone)}`,
       ),
-      ...periodIndicators.map(
-        (period, index) => `${labels.p}[${index}] ${period.title}: ${period.start} – ${period.end}`,
+      ...periods.map(
+        (period, index) =>
+          `${labels.p}[${index}] ${period.title}: ${period.start} – ${period.end}${values(period)}`,
       ),
       ...sharedViews.map((view, index) => `${labels.v}[${index}] view ${view.name}: ${view.view}`),
     ].join('\n');

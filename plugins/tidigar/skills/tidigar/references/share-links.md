@@ -43,7 +43,7 @@ installed and claims the link. The opener is not deployed yet; until it is,
 | `n=Name`                | the roadmap's name, required                                  |
 | `d=Text`                | its description                                               |
 | `y=2026`                | its year, required: the year of every `MM-DD` date            |
-| `w`                     | plans in work days: Monday to Friday, without vacations       |
+| `w`                     | plans in work days: Monday to Friday, without periods         |
 | `r=KEY`                 | the reference key prefix, up to 10 capital letters and digits |
 | `m1=Team:Design,Build`  | a dimension and its options, in order                         |
 | `a1=title/start/days/…` | an activity                                                   |
@@ -67,7 +67,7 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
   with `y=2026`, use `12-29`, `2027-12-30` and `2028-01-10` for starts
   in those three years. Then **days**: how many days it lasts, `1` for a
   single day. In a roadmap planned in work days these are work days, skipping weekends and
-  vacation periods. Use `-/-` in place of start and days for an undated
+  periods. Use `-/-` in place of start and days for an undated
   activity, as in `a1=Request_quotes/-/-`.
 - Then, in any order:
   - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
@@ -79,9 +79,8 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
     write `Team:Network` or `Phase:Network`; the prefix takes priority over
     position. If a shared name does not match its position, Tidigar reports
     the ambiguity and uses the first matching dimension.
-  - **Dependencies** after `@`, comma-separated: activities and fixed
-    milestones by key, such as `@a1,s2`. The activity starts after each of
-    them ends; `@a1:50` lets it start once 50% of `a1`'s planned days have
+  - **Dependencies** after `@`, comma-separated, by key, such as
+    `@a1,s2,p1`. The activity starts after each ends, or on a milestone's date; `@a1:50` lets it start once 50% of `a1`'s planned days have
     passed (`0`, `25`, `50` or `75`). Links involving undated activities
     preserve dependency order without constraining dates or allowing overlap
     shares. Dependencies MUST NOT form a cycle.
@@ -97,11 +96,10 @@ s2=Contract_signed/10-30/fixed
 p1=Autumn_break/10-26/5
 ```
 
-- A milestone has a title and a date, then `@` and the activities it waits
-  for, at least one day after each ends; or `fixed` for an event on a set
-  date, such as a decision, that activities wait for.
+- A milestone has a title and a date, or `-`, then `@` and what it waits
+  for; `fixed` marks an event on a set date, such as a decision.
 - A period is a titled band across the timeline, such as a holiday: title,
-  start and days. It is a vacation, without work days, unless `work` follows.
+  start and days. It is time off, without work days.
 
 ### Dimensions and the view
 

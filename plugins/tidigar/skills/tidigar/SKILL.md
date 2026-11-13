@@ -62,7 +62,7 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
 
 - Start with `t=1`, separate records with `~` and end with `~!`. `_` is a space.
 - `n=` is the name and `y=` the year; both are required. `w` plans in work days
-  (Monday–Friday, excluding vacation periods); `d=` describes the roadmap.
+  (Monday–Friday, excluding periods); `d=` describes the roadmap.
 - `m1=Team:Design,Development` is a dimension and its options in order. Number
   records from 1 without gaps: `m1`, `m2`, `a1`, `a2`, `s1`, `p1`.
 - `a1=title/start/days` is an activity. The start is `MM-DD` in year `y`,
@@ -79,13 +79,12 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
   `@a1:50` instead allows a start after half its planned days, rounded up;
   thresholds are `0`, `25`, `50`, `75` or `100`, with `100` the default.
   This uses planned duration, not reported progress. With several dependencies,
-  all thresholds must be met. An activity may start on a fixed milestone's
-  date. Dependencies must not form a cycle.
-- `s1=title/date/@a1` is a milestone at least one day after the activities it
-  waits for; `s1=title/date/fixed` is an event on a set date that activities
-  wait for with `@s1`.
-- `p1=title/start/days` is a vacation period; add `/work` for a period that
-  keeps its work days.
+  all thresholds must be met. A record may start on a milestone's date.
+  Dependencies must not form a cycle.
+- `s1=title/date/@a1,p1` is a milestone after what it waits for;
+  `fixed` marks an event on a set date, which it keeps.
+- `p1=title/start/days` is a period of time off, such as a vacation; a plan
+  in work days has no work days during it.
 - `v=` opens the roadmap: `timeline`, `board`, `list`, `flow`, `classic` (one
   row per activity under a label column, as in MS Project) or `compact`, then
   `group:Team`, `color:Team`, `rows:Team` or `columns:Phase`.

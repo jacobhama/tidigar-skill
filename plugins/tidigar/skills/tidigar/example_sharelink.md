@@ -72,7 +72,7 @@ The agent starts on a coming Monday, assumes durations a typical launch takes, n
     { "title": "Run the launch campaign", "start": "2027-04-06", "end": "2027-04-16", "values": { "Team": "Marketing", "Phase": "Launch" }, "dependsOn": ["App store review", "Brief press and partners"] },
     { "title": "Review user feedback", "start": "2027-04-26", "end": "2027-04-30", "values": { "Team": "Design", "Phase": "Launch" }, "dependsOn": ["Run the launch campaign"] }
   ],
-  "milestones": [{ "title": "Launch day", "date": "2027-04-05", "dependsOn": ["App store review", "Brief press and partners"] }],
+  "milestones": [{ "title": "Launch day", "start": "2027-04-05", "dependsOn": ["App store review", "Brief press and partners"] }],
   "view": { "type": "timeline", "groupBy": "Phase", "colorBy": "Team" }
 }
 ```

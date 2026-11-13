@@ -41,7 +41,7 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
       "dependsOn": ["Build"]
     }
   ],
-  "milestones": [{ "title": "Launch", "date": "2026-06-01", "dependsOn": ["Test"] }]
+  "milestones": [{ "title": "Launch", "start": "2026-06-01", "dependsOn": ["Test"] }]
 }
 ```
 
@@ -52,18 +52,19 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
 - `dimensions` maps a name to its options in order. An option is a name, or
   `{ "name": "Design", "color": "#4f7cff" }` for a stored plan; a link carries no colors. An
   activity's `values` names one option per dimension; an option no dimension lists is added.
-- `dependsOn` names activities by title, or by 0-based index where titles repeat. Activities may
-  also name fixed milestones by title.
+- `dependsOn` names any activity, milestone or period by title, or where titles repeat by
+  0-based index, counting activities, then milestones, then periods. A period waits for nothing.
 - An activity’s `startAfter` is an array in the same order as `dependsOn`, for example
   `"dependsOn": ["Design", "Approval"], "startAfter": [50, 100]`. Values are `0`, `25`, `50`, `75`
   or `100`; missing entries mean `100`, and trailing `100` entries may be omitted. It cannot have
-  more entries than `dependsOn`; fixed milestones require `100`. In the example, Design lasts 19
+  more entries than `dependsOn`; milestones and periods require `100`. In the example, Design lasts 19
   calendar days, so Build starts on March 26, after `ceil(19 × 50 / 100) = 10` days.
 - Builders preserve supplied dates. For a partial threshold, validation requires only that the
   successor does not start before the predecessor; it does not recalculate the work calendar. Choose
   dates that meet the intended threshold. Tidigar’s editor uses the exact threshold when scheduling.
 - Titles are at most 180 characters; milestones and periods need one.
-- `periods`: `{ "title", "start", "end", "vacation" }`, and `color` in a stored plan.
+- `milestones`: `{ "title", "start" }`; `periods`: `{ "title", "start", "end" }`. Both take
+  `values`. A period is time off: a plan in work days has no work days during it.
 - `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and
   `columns` take dimension names. Except for `groupBy`, they also take `"@progress"`.
   `start` and `end` set the timeline range. `layout` is

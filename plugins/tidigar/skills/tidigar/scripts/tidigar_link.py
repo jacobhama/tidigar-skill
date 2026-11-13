@@ -15,8 +15,8 @@ STYLES = ["standard", "minimal", "airy", "contrast", "terminal"]
 KEYS = {"plan": ["$schema", "version", "name", "description", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
         "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn", "startAfter"],
-        "milestone": ["title", "date", "dependsOn", "fixed"],
-        "period": ["title", "start", "end", "color", "vacation"],
+        "milestone": ["title", "start", "values", "dependsOn", "fixed"],
+        "period": ["title", "start", "end", "values"],
         "option": ["name", "color"], "view": list(VIEW)}
 AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group"}
 MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow"}
@@ -131,38 +131,59 @@ def to_payload(plan):
             for i, a in enumerate(items(plan.get("activities"), "activities"))]
     points = [record(m, named(f"milestones[{i}]", m), "milestone")
               for i, m in enumerate(items(plan.get("milestones"), "milestones"))]
-    titles, fixed = {}, {}
-    for i, a in enumerate(acts):
-        if isinstance(a.get("title"), str):
-            titles[a["title"]] = -1 if a["title"] in titles else i
-    for i, m in enumerate(points):
-        if m.get("fixed") is True and isinstance(m.get("title"), str):
-            fixed[m["title"]] = -1 if m["title"] in fixed else i
+    bands_in = [record(p, named(f"periods[{i}]", p), "period")
+                for i, p in enumerate(items(plan.get("periods"), "periods"))]
+    # Any activity or milestone may wait for any record, by title (activities first,
+    # then milestones, then periods) or by index: activities, then milestones, then periods.
+    kinds = [("activities", acts), ("milestones", points), ("periods", bands_in)]
+    total = len(acts) + len(points) + len(bands_in)
+    titles, offset = [], 0
+    for kind, records in kinds:
+        found = {}
+        for i, r in enumerate(records):
+            if isinstance(r.get("title"), str):
+                found[r["title"]] = -1 if r["title"] in found else offset + i
+        titles.append((kind, found))
+        offset += len(records)
 
-    def depends(value, path, milestone_ok):
+    def depends(value, path):
         found = []
         for position, ref in enumerate(items(value, path)):
             at = f"{path}[{position}]"
             if isinstance(ref, int) and not isinstance(ref, bool):
-                if not 0 <= ref < len(acts):
-                    fail(at, f"there is no activities[{ref}]")
+                if not 0 <= ref < total:
+                    fail(at, f"there is no record {ref}")
                 index = ref
             elif not isinstance(ref, str):
-                fail(at, "expected an activity title or index")
-            elif ref not in titles and milestone_ok and ref in fixed:
-                if fixed[ref] < 0:
-                    fail(at, f"several fixed milestones are titled {q(ref)}")
-                index = len(acts) + fixed[ref]
-            elif ref not in titles:
-                fail(at, f"no activity{' or fixed milestone' if milestone_ok and fixed else ''} is titled {q(ref)}")
-            elif titles[ref] < 0:
-                fail(at, f"several activities are titled {q(ref)}; use an index")
+                fail(at, "expected a title or an index")
             else:
-                index = titles[ref]
+                kind, named_ = next(((k, n) for k, n in titles if ref in n), (None, None))
+                if kind is None:
+                    fail(at, f"no activity, milestone or period is titled {q(ref)}")
+                if named_[ref] < 0:
+                    fail(at, f"several {kind} are titled {q(ref)}; use an index")
+                index = named_[ref]
             if index in found:
                 fail(at, "duplicate dependency")
             found.append(index)
         return found
+
+    # A record's values: dimension position -> option number.
+    def values_of(r, path):
+        values = {}
+        if not isinstance(r.get("values", {}), dict):
+            fail(f"{path}.values", "expected dimension -> option")
+        for key, option in r.get("values", {}).items():
+            at = f"{path}.values.{q(key)}"
+            options = dimension(key, at)
+            if option is None or option == "":
+                continue
+            if option not in [known for known, _ in options]:
+                add(options, option, None, at)
+            values[list(dims).index(key)] = [known for known, _ in options].index(option) + 1
+        return values
+
+    packed = lambda v: [v.get(k, 0) for k in range(max(v, default=-1) + 1)]
 
     dated, rows, marks, bands = [], [], [], []
     for i, a in enumerate(acts):
@@ -174,18 +195,8 @@ def to_payload(plan):
         progress = a.get("progress", 0)
         if progress not in (0, 25, 50, 75, 100) or isinstance(progress, bool):
             fail(f"{path}.progress", "must be one of 0, 25, 50, 75, or 100")
-        values = {}
-        if not isinstance(a.get("values", {}), dict):
-            fail(f"{path}.values", "expected dimension -> option")
-        for key, option in a.get("values", {}).items():
-            at = f"{path}.values.{q(key)}"
-            options = dimension(key, at)
-            if option is None or option == "":
-                continue
-            if option not in [known for known, _ in options]:
-                add(options, option, None, at)
-            values[list(dims).index(key)] = [known for known, _ in options].index(option) + 1
-        dep = depends(a.get("dependsOn"), f"{path}.dependsOn", True)
+        values = values_of(a, path)
+        dep = depends(a.get("dependsOn"), f"{path}.dependsOn")
         shares = a.get("startAfter", [])
         if not isinstance(shares, list):
             fail(f"{path}.startAfter", "expected an array")
@@ -196,7 +207,7 @@ def to_payload(plan):
             if isinstance(share, bool) or share not in (0, 25, 50, 75, 100):
                 fail(f"{path}.startAfter[{position}]", "must be one of 0, 25, 50, 75, or 100")
             if share != 100 and dep[position] >= len(acts):
-                fail(f"{path}.startAfter[{position}]", "a fixed milestone requires 100")
+                fail(f"{path}.startAfter[{position}]", "a milestone or a period requires 100")
         while shares and shares[-1] == 100:
             shares.pop()
         dated += [start, end]
@@ -205,58 +216,61 @@ def to_payload(plan):
                      values, dep, path, shares])
     for i, m in enumerate(points):
         path = named(f"milestones[{i}]", m)
-        date = day(m.get("date"), f"{path}.date")
-        if flag(m.get("fixed"), f"{path}.fixed") and items(m.get("dependsOn"), path):
-            fail(f"{path}.dependsOn", "a fixed milestone waits for nothing")
+        date = day(m.get("start"), f"{path}.start")
+        flag(m.get("fixed"), f"{path}.fixed")
         dated.append(date)
         marks.append([text(m.get("title"), f"{path}.title", 180, True), date,
-                      depends(m.get("dependsOn"), f"{path}.dependsOn", False),
-                      1 if m.get("fixed") else 0, path])
-    for i, p in enumerate(items(plan.get("periods"), "periods")):
+                      depends(m.get("dependsOn"), f"{path}.dependsOn"),
+                      1 if m.get("fixed") else 0, path, values_of(m, path)])
+    for i, p in enumerate(bands_in):
         path = named(f"periods[{i}]", p)
-        record(p, path, "period")
         start = day(p.get("start"), f"{path}.start")
         end = day(p["end"], f"{path}.end") if "end" in p else start
         if end < start:
             fail(f"{path}.end", "must not be before start")
         dated += [start, end]
         bands.append([text(p.get("title"), f"{path}.title", 180, True), start, end - start,
-                      color(p["color"], f"{path}.color") if "color" in p else PERIOD_COLOR,
-                      0 if flag(p.get("vacation"), f"{path}.vacation") is False else 1])
+                      values_of(p, path)])
     flag(plan.get("workDays"), "workDays")
+
+    # Every record in link order: [path, start, end or None for a milestone, dependsOn,
+    # shares, fixed]. A period waits for nothing.
+    linked = ([[r[7], r[1], r[1] + r[2], r[6], r[8], 0] for r in rows]
+              + [[m[4], m[1], None, m[2], [], m[3]] for m in marks]
+              + [[named(f"periods[{i}]", bands_in[i]), b[1], b[1] + b[2], [], [], 0]
+                 for i, b in enumerate(bands)])
 
     # Partial dependencies permit overlap, so date ordering alone cannot rule out cycles.
     visiting, visited = set(), set()
     def visit(index):
-        if index in visiting:
-            fail(f"{rows[index][7]}.dependsOn", "dependency cycle")
         if index in visited:
             return
+        if index in visiting:
+            fail(f"{linked[index][0]}.dependsOn", "dependency cycle")
         visiting.add(index)
-        for parent in rows[index][6]:
-            if parent < len(rows):
-                visit(parent)
+        for parent in linked[index][3]:
+            visit(parent)
         visiting.remove(index)
         visited.add(index)
-    for index in range(len(rows)):
+    for index in range(len(linked)):
         visit(index)
 
-    # Stored dates are preserved; partial dependencies cannot precede the parent's start.
-    for row in rows:
-        for position, index in enumerate(row[6]):
-            if index >= len(rows):
-                mark = marks[index - len(rows)]
-                if row[1] < mark[1]:
-                    fail(f"{row[7]}.start", f"must not be before fixed milestone {mark[4]}")
-            elif position < len(row[8]) and row[8][position] < 100:
-                if row[1] < rows[index][1]:
-                    fail(f"{row[7]}.start", f"must not be before dependency {rows[index][7]} starts")
-            elif row[1] <= rows[index][1] + rows[index][2]:
-                fail(f"{row[7]}.start", f"must be at least one day after dependency {rows[index][7]} ends")
-    for mark in marks:
-        for index in mark[2]:
-            if mark[1] <= rows[index][1] + rows[index][2]:
-                fail(f"{mark[4]}.date", f"must be at least one day after dependency {rows[index][7]} ends")
+    # Stored dates are preserved; a record starts no earlier than each predecessor's end,
+    # a milestone's date, or with a share, its start. A fixed milestone keeps its date.
+    for path, start, _, after, shares, fixed in linked:
+        if fixed:
+            continue
+        for position, index in enumerate(after):
+            parent = linked[index]
+            if position < len(shares) and shares[position] < 100:
+                if start < parent[1]:
+                    fail(f"{path}.start", f"must not be before dependency {parent[0]} starts")
+            elif parent[2] is None:
+                if start < parent[1]:
+                    kind = "fixed milestone" if parent[5] else "milestone"
+                    fail(f"{path}.start", f"must not be before {kind} {parent[0]}")
+            elif start <= parent[2]:
+                fail(f"{path}.start", f"must be at least one day after dependency {parent[0]} ends")
 
     year = datetime.date.fromordinal(min(dated)).year if dated else datetime.date.today().year
     base = datetime.date(year, 1, 1).toordinal()
@@ -275,12 +289,15 @@ def to_payload(plan):
     if dims:
         payload["m"] = [[key, options] for key, options in dims.items()]
     if rows:
-        payload["i"] = [trim([t, s - base, n, d, pr, [v.get(k, 0) for k in range(max(v, default=-1) + 1)], dep, shares],
+        payload["i"] = [trim([t, s - base, n, d, pr, packed(v), dep, shares],
                              [None, None, None, "", 0, [], [], []]) for t, s, n, d, pr, v, dep, _, shares in rows]
     if marks:
-        payload["s"] = [trim([t, d - base, dep, f], [None, None, [], 0]) for t, d, dep, f, _ in marks]
+        payload["s"] = [trim([t, d - base, dep, f, "", "", 0, packed(v)], [None, None, [], 0, "", "", 0, []])
+                        for t, d, dep, f, _, v in marks]
     if bands:
-        payload["p"] = [trim([t, s - base, n, c, v], [None] * 4 + [1]) for t, s, n, c, v in bands]
+        # The fourth and fifth places are not read: every period is time off, colored by its values.
+        payload["p"] = [trim([t, s - base, n, PERIOD_COLOR, 1, "", "", packed(v)], [None] * 4 + [1, "", "", []])
+                        for t, s, n, v in bands]
 
     view = record(plan.get("view", {}), "view", "view")
     o = {}
@@ -358,7 +375,7 @@ def link(payload):
         value = iso(base + offset)
         return value[5:] if value.startswith(f"{year}-") else value
 
-    vacations = [(p[1], p[1] + p[2]) for p in bands if (p[4] if len(p) > 4 else 1) == 1]
+    vacations = [(p[1], p[1] + p[2]) for p in bands]
 
     def working(offset):
         return datetime.date.fromordinal(base + offset).weekday() < 5 and not any(a <= offset <= b for a, b in vacations)
@@ -369,7 +386,11 @@ def link(payload):
         return max(1, sum(1 for d in range(start, start + length + 1) if working(d)))
 
     def key(index):
-        return f"a{index + 1}" if index < len(rows) else f"s{index - len(rows) + 1}"
+        if index < len(rows):
+            return f"a{index + 1}"
+        if index < len(rows) + len(marks):
+            return f"s{index - len(rows) + 1}"
+        return f"p{index - len(rows) - len(marks) + 1}"
 
     out = ["t=1", f"n={field(payload['n'])}"]
     if payload.get("d"):
@@ -403,11 +424,11 @@ def link(payload):
         parts = [field(m[0]), date(m[1])]
         if m[3:4] == [1]:
             parts.append("fixed")
-        elif len(m) > 2 and m[2]:
+        if len(m) > 2 and m[2]:
             parts.append("@" + ",".join(key(x) for x in m[2]))
         out.append(f"s{k + 1}=" + "/".join(parts))
     for k, p in enumerate(bands):
-        out.append(f"p{k + 1}={field(p[0])}/{date(p[1])}/{p[2] + 1}" + ("/work" if p[4:5] == [0] else ""))
+        out.append(f"p{k + 1}={field(p[0])}/{date(p[1])}/{p[2] + 1}")
     o = payload.get("o")
     if o:
         parts = [MODES[o.get("view", "grid")]]
@@ -481,12 +502,13 @@ def payload_of(url):
         dims.append([text(dim), [[text(o), COLORS[i % len(COLORS)]] for i, o in enumerate(options.split(",")) if o]])
     keys = {f"a{n}": i for i, (n, _) in enumerate(ordered["a"])}
     keys.update({f"s{n}": len(ordered["a"]) + i for i, (n, _) in enumerate(ordered["s"])})
+    keys.update({f"p{n}": len(ordered["a"]) + len(ordered["s"]) + i for i, (n, _) in enumerate(ordered["p"])})
     bands = []
     for number, value in ordered["p"]:
         title, start, length, *rest = value.split("/") + ["", ""]
         first = day(start, f"p{number}")
-        bands.append([text(title), first, count(length, f"p{number}") - 1, PERIOD_COLOR, 0 if "work" in rest else 1])
-    vacations = [(p[1], p[1] + p[2]) for p in bands if p[4] == 1]
+        bands.append([text(title), first, count(length, f"p{number}") - 1, PERIOD_COLOR, 1])
+    vacations = [(p[1], p[1] + p[2]) for p in bands]
 
     def end(first, n):
         if fields.get("w") is None:
@@ -585,12 +607,16 @@ def read(url):
     payload = payload_of(url)
     base = datetime.date(payload["y"], 1, 1).toordinal()
     dims, rows, marks = payload.get("m", []), payload.get("i", []), payload.get("s", [])
-    titles = [row[0] if row else "" for row in rows]
+    bands = payload.get("p", [])
+    titles = [r[0] if r else "" for r in rows + marks + bands]
+    kind = lambda i: 0 if i < len(rows) else 1 if i < len(rows) + len(marks) else 2
 
+    # A predecessor by its title where that finds it again, else by index: other records
+    # may share the title only in a kind looked up later.
     def ref(index):
-        if index >= len(rows):
-            return marks[index - len(rows)][0]
-        return titles[index] if titles[index] and titles.count(titles[index]) == 1 else index
+        title = titles[index]
+        clash = any(t == title and kind(i) <= kind(index) for i, t in enumerate(titles) if i != index)
+        return title if title and not clash else index
 
     plan = {"version": 1, "name": payload["n"]}
     if payload.get("d"):
@@ -600,6 +626,8 @@ def read(url):
     if dims:
         plan["dimensions"] = {key: [o if c == COLORS[i % len(COLORS)] else {"name": o, "color": "#" + c}
                                     for i, (o, c) in enumerate(options)] for key, options in dims}
+    # Option numbers as dimension name -> option name.
+    chosen = lambda values: {dims[k][0]: dims[k][1][v - 1][0] for k, v in enumerate(values) if v}
     if rows:
         plan["activities"] = []
         for row in rows:
@@ -609,22 +637,22 @@ def read(url):
                 activity["description"] = description
             if progress:
                 activity["progress"] = progress
-            chosen = {dims[k][0]: dims[k][1][v - 1][0] for k, v in enumerate(values) if v}
-            if chosen:
-                activity["values"] = chosen
+            if chosen(values):
+                activity["values"] = chosen(values)
             if after:
                 activity["dependsOn"] = [ref(index) for index in after]
             if len(row) > 7 and row[7]:
                 activity["startAfter"] = row[7]
             plan["activities"].append(activity)
     if marks:
-        plan["milestones"] = [dict({"title": m[0], "date": iso(base + m[1])},
+        plan["milestones"] = [dict({"title": m[0], "start": iso(base + m[1])},
+                                   **({"values": chosen(m[7])} if len(m) > 7 and chosen(m[7]) else {}),
                                    **({"dependsOn": [ref(x) for x in m[2]]} if m[2:3] and m[2] else {}),
-                                   **({"fixed": True} if m[3:] == [1] else {})) for m in marks]
+                                   **({"fixed": True} if len(m) > 3 and m[3] == 1 else {})) for m in marks]
     if payload.get("p"):
         plan["periods"] = [dict({"title": p[0], "start": iso(base + p[1]), "end": iso(base + p[1] + p[2])},
-                                **({"color": "#" + p[3]} if p[3] != PERIOD_COLOR else {}),
-                                **({"vacation": False} if p[4:] == [0] else {})) for p in payload["p"]]
+                                **({"values": chosen(p[7])} if len(p) > 7 and chosen(p[7]) else {}))
+                           for p in payload["p"]]
     view, o = {}, payload.get("o", {})
     for key, field in VIEW.items():
         if field in o:
@@ -650,22 +678,25 @@ def summary(payload):
     """What the link holds, with real dates, to check against the request."""
     base = datetime.date(payload["y"], 1, 1).toordinal()
     rows, marks, dims = payload.get("i", []), payload.get("s", []), payload.get("m", [])
-    place = lambda index: f"activities[{index}]" if index < len(rows) else f"milestones[{index - len(rows)}]"
+    place = lambda index: (f"activities[{index}]" if index < len(rows) else f"milestones[{index - len(rows)}]"
+                           if index < len(rows) + len(marks) else f"periods[{index - len(rows) - len(marks)}]")
     def after(refs, shares=()):
         return (" · after " + ", ".join(place(ref) + (f" ({shares[i]}%)" if i < len(shares) and shares[i] < 100 else "")
                                        for i, ref in enumerate(refs))) if refs else ""
+    values = lambda chosen: "".join(f" · {dims[k][0]}: {dims[k][1][v - 1][0]}" for k, v in enumerate(chosen) if v)
     lines = [f"{payload['n']} ({payload['y']}{', work days' if payload.get('w') else ''})"]
     for i, row in enumerate(rows):
         row = row + ["", 0, 0, "", 0, [], []][len(row):]
         lines.append(f"activities[{i}] {row[0] or '(untitled)'}: {iso(base + row[1])} – {iso(base + row[1] + row[2])}"
                      + (f" · {row[4]}% done" if row[4] else "")
-                     + "".join(f" · {dims[k][0]}: {dims[k][1][v - 1][0]}" for k, v in enumerate(row[5]) if v)
+                     + values(row[5])
                      + after(row[6], row[7] if len(row) > 7 else []))
     for i, m in enumerate(marks):
-        lines.append(f"milestones[{i}] {m[0]}: {iso(base + m[1])}" + (" · fixed" if m[3:] == [1] else "")
-                     + after(m[2] if len(m) > 2 else []))
+        lines.append(f"milestones[{i}] {m[0]}: {iso(base + m[1])}" + (" · fixed" if len(m) > 3 and m[3] == 1 else "")
+                     + values(m[7] if len(m) > 7 else []) + after(m[2] if len(m) > 2 else []))
     for i, p in enumerate(payload.get("p", [])):
-        lines.append(f"periods[{i}] {p[0]}: {iso(base + p[1])} – {iso(base + p[1] + p[2])}")
+        lines.append(f"periods[{i}] {p[0]}: {iso(base + p[1])} – {iso(base + p[1] + p[2])}"
+                     + values(p[7] if len(p) > 7 else []))
     return "\n".join(lines)
 
 

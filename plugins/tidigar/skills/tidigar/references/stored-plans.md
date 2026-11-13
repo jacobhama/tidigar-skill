@@ -60,7 +60,7 @@ save. Offer a separate copy only if the user wants one.
    UUIDs. Use the [roadmap file format](https://tidigar.com/agents/docs/file-format.md)
    for the fields you edit. Never rebuild an existing project from simplified
    plan JSON or a share link: that would lose its identities and views.
-   An activity's `assignee` is the organisation's member number for a person,
+   An item's `assignee` is the organisation's member number for a person,
    not an account: keep it as read and assign with `tidigar_assign_activity`.
 
 ## Validate and save the change
@@ -134,7 +134,8 @@ comments require Tidigar Business or Server.
    with `tidigar_list_activities` and its plan ID and `ref`. For unassigned
    backlog use `assignee: ""`, `dated: false` and `progress: 0`. Use `all: true`
    for a cross-plan search. Read the ticket with `tidigar_get_activity`.
-   If a reference is ambiguous, use the activity ID.
+   If a reference is ambiguous, use the activity ID. Milestones
+   have `type: "milestone"`.
 2. Claim with `tidigar_claim_activity`. On `activity_claimed`, report who
    holds it. Set `takeOver: true` only at the user's request.
 3. Use `tidigar_update_activity` with the revision read and changed fields.
