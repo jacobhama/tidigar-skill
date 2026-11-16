@@ -12,7 +12,7 @@ VIEW = {"type": "view", "groupBy": "group", "colorBy": "color", "rows": "row",
 # classic: one activity per row under a fixed label, as in MS Project; compact: shared rows.
 LAYOUTS = {"classic": "single-label", "compact": "compact"}
 STYLES = ["standard", "minimal", "airy", "contrast", "terminal"]
-KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "workDays", "dimensions",
+KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "costUnit", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
         "activity": ["title", "start", "end", "description", "estimatedCostMinor", "progress", "values", "dependsOn", "startAfter"],
         "milestone": ["title", "start", "values", "dependsOn", "fixed"],
@@ -98,6 +98,9 @@ def to_payload(plan):
     currency = plan.get("costCurrency")
     if "costCurrency" in plan and currency not in ("SEK", "EUR", "USD", "GBP", "NOK", "DKK"):
         fail("costCurrency", "expected a supported currency")
+    unit = plan.get("costUnit")
+    if "costUnit" in plan and (unit != "thousands" or not currency):
+        fail("costUnit", "expected thousands and a cost currency")
     dims = {}  # dimension name -> [[option, color], ...], in order
 
     def dimension(key, path):
@@ -296,6 +299,8 @@ def to_payload(plan):
         payload["d"] = text(plan["description"], "description", 500)
     if currency is not None:
         payload["k"] = currency
+    if unit is not None:
+        payload["u"] = unit
     if plan.get("workDays"):
         payload["w"] = 1
     if dims:
@@ -413,6 +418,8 @@ def link(payload):
         out.append("w")
     if payload.get("k"):
         out.append(f"k={field(payload['k'])}")
+    if payload.get("u"):
+        out.append(f"u={field(payload['u'])}")
     for k, (dim, options) in enumerate(dims):
         out.append(f"m{k + 1}={name(dim)}:" + ",".join(name(o) for o, _ in options))
     for k, row in enumerate(rows):
@@ -601,6 +608,8 @@ def payload_of(url):
         payload["d"] = text(fields["d"])
     if "k" in fields:
         payload["k"] = text(fields["k"])
+    if "u" in fields:
+        payload["u"] = text(fields["u"])
     if "w" in fields:
         payload["w"] = 1
     for key, value in (("m", dims), ("i", rows), ("s", marks), ("p", bands)):
@@ -651,6 +660,8 @@ def read(url):
         plan["description"] = payload["d"]
     if payload.get("k"):
         plan["costCurrency"] = payload["k"]
+    if payload.get("u"):
+        plan["costUnit"] = payload["u"]
     if payload.get("w") == 1:
         plan["workDays"] = True
     if dims:

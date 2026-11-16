@@ -31,7 +31,7 @@ const scope = { crypto: globalThis.crypto };
  *   {
  *     manifest: {
  *       projectId, formatVersion, name, description, dimensions, year,
- *       timeZone, nightHours, costCurrency
+ *       timeZone, nightHours, costCurrency, costUnit
  *     },
  *     items, sharedViews
  *   }
@@ -597,9 +597,11 @@ const scope = { crypto: globalThis.crypto };
       invalid('manifest.formatVersion', `must be ${FORMAT_VERSION}`);
     const timeZone =
       source.timeZone === undefined ? undefined : zoneValue(source.timeZone, 'manifest.timeZone');
-    const { costCurrency } = source;
+    const { costCurrency, costUnit } = source;
     if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
       invalid('manifest.costCurrency', 'expected a supported currency');
+    if (costUnit !== undefined && (costUnit !== 'thousands' || !costCurrency))
+      invalid('manifest.costUnit', 'expected thousands and a cost currency');
     const nightHours = source.nightHours === undefined ? undefined : nightValue(source.nightHours);
     const projectId = uuidValue(source.projectId, 'manifest.projectId');
     if (registry.has(projectId)) invalid('manifest.projectId', 'duplicate ID');
@@ -638,6 +640,7 @@ const scope = { crypto: globalThis.crypto };
       schedule,
       ...(nightHours ? { nightHours } : {}),
       ...(costCurrency ? { costCurrency } : {}),
+      ...(costUnit ? { costUnit } : {}),
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
       // Only a project with reference keys carries its prefix.
       ...(refPrefix ? { refPrefix } : {}),
@@ -2889,7 +2892,7 @@ const scope = { crypto: globalThis.crypto };
       if (lists[letter] && number) {
         if (lists[letter].has(Number(number))) note(key, 'appears twice; the second was ignored');
         else lists[letter].set(Number(number), value);
-      } else if (['n', 'd', 'y', 'w', 'r', 'v', 'c', 'k'].includes(key)) {
+      } else if (['n', 'd', 'y', 'w', 'r', 'v', 'c', 'k', 'u'].includes(key)) {
         if (fields.has(key)) note(key, 'appears twice; the second was ignored');
         else fields.set(key, value);
       } else note(key, 'is not a record Tidigar knows and was ignored');
@@ -2915,6 +2918,7 @@ const scope = { crypto: globalThis.crypto };
       if (fields.get('w')) note('w', 'is a flag and takes no value');
     }
     if (fields.has('k')) payload.k = text(fields.get('k'));
+    if (fields.has('u')) payload.u = text(fields.get('u'));
     if (fields.has('r')) payload.r = text(fields.get('r'));
 
     // The year: given, or the first full date's, or this year.
@@ -3293,6 +3297,7 @@ const scope = { crypto: globalThis.crypto };
     records.push(`y=${year}`);
     if (payload.w === 1) records.push('w');
     if (payload.k) records.push(`k=${field(payload.k)}`);
+    if (payload.u) records.push(`u=${field(payload.u)}`);
     if (payload.r) records.push(`r=${field(payload.r)}`);
     dimensions.forEach(([dimension, options], index) =>
       records.push(
@@ -3880,6 +3885,7 @@ const scope = { crypto: globalThis.crypto };
 
       const payload = { n: manifest.name, y: manifest.year };
       if (manifest.costCurrency) payload.k = manifest.costCurrency;
+      if (manifest.costUnit) payload.u = manifest.costUnit;
       if (manifest.description) payload.d = manifest.description;
       if (manifest.schedule === 'work-days') payload.w = 1;
       if (manifest.timeZone) payload.z = manifest.timeZone;
@@ -4151,6 +4157,7 @@ const scope = { crypto: globalThis.crypto };
         manifest: {
           projectId,
           formatVersion: model.formatVersion,
+          ...(payload.u === undefined ? {} : { costUnit: payload.u }),
           ...(payload.k === undefined ? {} : { costCurrency: payload.k }),
           ...(payload.z === undefined ? {} : { timeZone: payload.z }),
           ...(payload.h === undefined ? {} : { nightHours: payload.h }),
@@ -4810,6 +4817,7 @@ const scope = { crypto: globalThis.crypto };
       'name',
       'description',
       'costCurrency',
+      'costUnit',
       'workDays',
       'dimensions',
       'activities',
@@ -4890,12 +4898,14 @@ const scope = { crypto: globalThis.crypto };
     record(plan, 'plan', 'plan');
     if (plan.version !== undefined && plan.version !== 1) fail('version', 'must be 1');
     const name = text(plan.name, 'name');
-    const { costCurrency } = plan;
+    const { costCurrency, costUnit } = plan;
     if (
       costCurrency !== undefined &&
       !['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(costCurrency)
     )
       fail('costCurrency', 'expected a supported currency');
+    if (costUnit !== undefined && (costUnit !== 'thousands' || !costCurrency))
+      fail('costUnit', 'expected thousands and a cost currency');
 
     // Dimensions keep the order they are declared in, then the order an
     // activity first names them; options likewise.
@@ -5094,6 +5104,7 @@ const scope = { crypto: globalThis.crypto };
     const payload = { n: name, y: year };
     if (plan.description !== undefined) payload.d = text(plan.description, 'description');
     if (costCurrency !== undefined) payload.k = costCurrency;
+    if (costUnit !== undefined) payload.u = costUnit;
     if (plan.workDays) payload.w = 1;
     if (dimensions.length)
       payload.m = dimensions.map((dimension) => [
@@ -5238,6 +5249,7 @@ const scope = { crypto: globalThis.crypto };
     const plan = { $schema: SCHEMA, version: 1, name: payload.n };
     if (payload.d) plan.description = payload.d;
     if (payload.k) plan.costCurrency = payload.k;
+    if (payload.u) plan.costUnit = payload.u;
     if (payload.w === 1) plan.workDays = true;
     if (dimensions.length)
       plan.dimensions = Object.fromEntries(

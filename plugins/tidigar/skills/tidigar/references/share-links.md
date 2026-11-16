@@ -44,6 +44,7 @@ installed and claims the link. The opener is not deployed yet; until it is,
 | `d=Text`                | its description                                               |
 | `y=2026`                | its year, required: the year of every `MM-DD` date            |
 | `w`                     | plans in work days: Monday to Friday, without periods         |
+| `u=thousands` | display costs in thousands |
 | `k=SEK` | the plan currency for estimated costs, when present |
 | `r=KEY`                 | the reference key prefix, up to 10 capital letters and digits |
 | `m1=Team:Design,Build`  | a dimension and its options, in order                         |
