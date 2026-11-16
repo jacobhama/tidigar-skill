@@ -147,6 +147,8 @@ comments require Tidigar Business or Server.
    [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list).
 
 Create a ticket with `tidigar_add_activity`. Omit dates for backlog work.
+Write its specification as [Markdown source](https://tidigar.com/docs/file-format.html#item-activity)
+in `fields.description`. Read the same source back with `tidigar_get_activity`.
 An optional prefix selects its reference area. Use `tidigar_assign_activity`
 with an editor's account ID or an empty assignee to clear it.
 

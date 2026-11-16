@@ -132,8 +132,8 @@ const scope = { crypto: globalThis.crypto };
   const MAX_DIMENSIONS = 20;
   const MAX_OPTIONS = 100;
   const MAX_ITEMS = 10000;
-  // The project format this model reads and writes. Earlier versions are
-  // not read: their milestones and periods were separate collections.
+  // The project format this model writes. JSON of version 1 is read and
+  // upgraded (`upgradeProject`); Markdown and calendars of it are not.
   const FORMAT_VERSION = 2;
   const MAX_VIEWS = 99;
   const MAX_REF_LENGTH = 32;
@@ -846,21 +846,43 @@ const scope = { crypto: globalThis.crypto };
    * milestone becomes an activity of one day, or one hour at a local time,
    * that ends at its moment. Progress becomes a status: only a finished
    * activity becomes a finished milestone. Dates may then need planning.
+   * A dated activity or milestone also becomes a period, time off on the
+   * days it covers (a milestone's one day), and a period an activity on its
+   * dates. A period has no progress, assignee, dependencies or start
+   * overlaps, so those are dropped; what waits for it still may. An undated
+   * record cannot become a period, and an incoming one is never converted.
    */
   function convertRecord(record, type) {
     const from = kindOf(record);
-    if (from === type || from === 'period' || !['activity', 'milestone'].includes(type))
+    if (
+      from === type ||
+      !RECORD_KINDS.includes(type) ||
+      record.source ||
+      (from === 'period' && type !== 'activity') ||
+      (type === 'period' && record.start === undefined)
+    )
       throw new TypeError(`Cannot convert a ${from} to a ${type}`);
-    const common = {
+    const own = {
       id: record.id,
       projectId: record.projectId,
       title: record.title,
       description: record.description || '',
       values: { ...(record.values || {}) },
-      dependsOn: [...(record.dependsOn || [])],
       ...(record.ref ? { ref: record.ref } : {}),
+    };
+    if (type === 'period')
+      return {
+        ...own,
+        type: 'period',
+        start: record.start.slice(0, 10),
+        end: (from === 'milestone' ? record.start : record.end).slice(0, 10),
+      };
+    const common = {
+      ...own,
+      dependsOn: [...(record.dependsOn || [])],
       ...(record.assignee ? { assignee: record.assignee } : {}),
     };
+    if (from === 'period') return { ...common, progress: 0, start: record.start, end: record.end };
     if (type === 'milestone')
       return {
         ...common,
@@ -1133,21 +1155,16 @@ const scope = { crypto: globalThis.crypto };
       const resolution = source.resolution === undefined ? 'month' : source.resolution;
       if (!RESOLUTIONS.has(resolution)) invalid(`${path}.resolution`, 'has an unsupported value');
       const timelineScaleRows =
-        source.timelineScaleRows === undefined ? 3 : source.timelineScaleRows;
+        source.timelineScaleRows === undefined ? 2 : source.timelineScaleRows;
       if (![1, 2, 3].includes(timelineScaleRows))
         invalid(`${path}.timelineScaleRows`, 'must be 1, 2, or 3');
       const textMode =
         source.textMode === undefined ? 'beside' : currentViewValue('textMode', source.textMode);
       if (!TEXT_MODES.has(textMode)) invalid(`${path}.textMode`, 'has an unsupported value');
       const timelineActivityRows =
-        source.timelineActivityRows === undefined
-          ? source.hideTimelineLabels === false
-            ? 'single-label'
-            : 'single'
-          : source.timelineActivityRows;
+        source.timelineActivityRows === undefined ? 'single' : source.timelineActivityRows;
       if (!ACTIVITY_ROW_MODES.has(timelineActivityRows))
         invalid(`${path}.timelineActivityRows`, 'has an unsupported value');
-      const hideTimelineLabels = timelineActivityRows === 'single';
       const timelineMilestoneMode =
         source.timelineMilestoneMode === undefined
           ? 'label'
@@ -1273,7 +1290,6 @@ const scope = { crypto: globalThis.crypto };
         showAssignee: booleanValue(source.showAssignee, `${path}.showAssignee`, true),
         showRefs: booleanValue(source.showRefs, `${path}.showRefs`, false),
         timelineActivityRows,
-        hideTimelineLabels,
         timelineMilestoneMode,
         timelineMilestonesBesideWork: booleanValue(
           source.timelineMilestonesBesideWork,
@@ -1408,9 +1424,36 @@ const scope = { crypto: globalThis.crypto };
     return value;
   }
 
+  /*
+   * A version 1 project kept milestones and periods in collections of their
+   * own. They become typed items after the activities, a milestone's `date`
+   * its `start`; a period's color and vacation flag are dropped.
+   */
+  function upgradeProject(source) {
+    if (source.manifest?.formatVersion !== 1) return source;
+    const { milestones, periodIndicators, ...rest } = source;
+    const list = (value) => (Array.isArray(value) ? value : []);
+    return {
+      ...rest,
+      manifest: { ...source.manifest, formatVersion: FORMAT_VERSION },
+      items: [
+        ...list(source.items),
+        ...list(milestones).map(({ date, ...milestone }) => ({
+          ...milestone,
+          type: 'milestone',
+          start: date,
+        })),
+        ...list(periodIndicators).map(({ color, vacation, ...period }) => ({
+          ...period,
+          type: 'period',
+        })),
+      ],
+    };
+  }
+
   /** Validate and deep-normalize a complete canonical project. */
   function normalizeProject(value) {
-    const source = requireRecord(value, 'project');
+    const source = upgradeProject(requireRecord(value, 'project'));
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
     const items = normalizeItems(source.items, manifest, registry);
@@ -3348,7 +3391,6 @@ const scope = { crypto: globalThis.crypto };
     'id',
     'projectId',
     'name',
-    'hideTimelineLabels',
     'showAssignee',
     'timelineCollapsedSummaries',
   ]);

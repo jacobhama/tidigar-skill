@@ -28,25 +28,19 @@ Create links directly with the guide below; no scripts are required. For optiona
   and commit link in `tidigar_add_comment`. Set progress to 100 when done and
   dependencies permit it. [Ticket workflow](https://tidigar.com/agents/stored-plans.md#activities-as-tickets).
 
+## Write activity descriptions
+
+Store Markdown source in `description`. Use the
+[supported syntax](https://tidigar.com/agents/docs/file-format.md#item-activity)
+and preserve existing source, including single line breaks and unsupported
+syntax, unless you are editing the description.
+
 ## Create a share link
 
-Write a clickable Tidigar link directly using the text format below. Writing
-the format by hand is expected; no tool calls, scripts, downloads or account
-are required. This guide is enough for a normal plan; its references are
-optional. A script is only for validating a finished link, not for creating
-one.
-
-1. Plan the activities, dates and dependencies in the user's language. Choose
-   reasonable dates and durations when unspecified and state your assumptions.
-2. Unless the user says otherwise, include two useful dimensions: who does the
-   work, such as Team, and its Phase or Status. Owners and categories are also
-   dimensions. Activities select one option per dimension.
-3. Write the link one record at a time using the syntax below. Check dates,
-   dependencies and record counts against the request.
-4. Return it as a clickable Markdown link, such as `[Open the plan](URL)`,
-   followed by your assumptions. Do not claim script or browser validation
-   unless you performed it. Validation with a script is optional; lack of tools
-   is no reason to withhold the link.
+Write the link directly in the user's language. Choose dates and durations,
+state assumptions, and check dependencies and record counts. Unless asked
+otherwise, use useful dimensions such as Team and Phase or Status. Return a
+clickable link. A script is optional for validation.
 
 ## Example
 
@@ -71,7 +65,8 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
   day; in work days with `w`. Then, in any order: its options by name
   (`Design,Plan`), `@a1,s2` for what it waits for, `@a1:50` for a partial
   dependency, `0p`, `25p`, `50p`, `75p` or `100p` for progress and `d=` for a
-  description. List options in dimension order: repeated names such as
+  description. Encode its Markdown using the text escapes below. List
+  options in dimension order: repeated names such as
   `Network,Network` select the first and second dimensions respectively.
   Use `Team:Design` to select a dimension explicitly,
   or `Size:50p` when an option looks like progress.
@@ -97,7 +92,11 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
   `%5F`, `%` as `%25`, `&` as `%26`, `#` as `%23`, `(` as `%28`, `)` as
   `%29`, `"` as `%22`, `<` as `%3C` and `>` as `%3E`. In dimension or option
   names, also escape `,` as `%2C`, `:` as `%3A`, `@` as `%40` and `=` as
-  `%3D`. Write å, ä, ö and other letters as they are.
+  `%3D`. In Markdown descriptions, also escape backticks as `%60`, square
+  brackets as `%5B` and `%5D`, braces as `%7B` and `%7D`, vertical bar
+  as `%7C`, backslash as `%5C` and `^` as `%5E`. Use `%0A` for a line feed,
+  `%0D` for a carriage return and `%09` for a tab. Write å, ä, ö and other
+  letters as they are.
 - Titles are at most 180 characters, dimension and roadmap names 100, and the
   roadmap description 500. Years are 1900–2200.
 - Keep the fragment after `#` within 1,900 characters. If necessary, shorten
@@ -106,23 +105,15 @@ https://open.tidigar.com/s#t=1~n=Website_launch~y=2026~m1=Team:Design,Developmen
 
 ## Change a share link
 
-Read its `#t=1~…~!` records directly, change the relevant fields and return a
-new link. Preserve the other records and references; update `c=` if records
-are added or removed. When dates move, check the dependent activities and
-milestones too. The old link keeps opening the old plan.
-
-Tidigar's own compressed `#s=1.…` links are internal to the app's sharing
-flow. Ask the user to open one in Tidigar; do not reconstruct it by hand.
+Edit the relevant `#t=1~…~!` records. Keep other records and references,
+update `c=` after additions or removals and recheck dependent dates. The
+original URL keeps opening the original plan. Open compressed `#s=1.…`
+links in Tidigar.
 
 ## Return or embed the finished link
 
-Keep the finished URL on one line. Preserve its fragment and text escaping;
-do not append tracking parameters, shorten it or normalize it. These rules
-apply when returning the finished link; you can edit its records to make a
-new plan as described above.
-
-Always provide a clickable link. Where HTML is supported, you may also embed
-the same fragment at `https://embed.tidigar.com/#t=1~…~!`:
+Keep the clickable URL on one line with its escapes intact. To embed, use
+the same fragment on `https://embed.tidigar.com/`:
 
 ```html
 <iframe src="https://embed.tidigar.com/#t=1~…~!" title="Roadmap" width="100%" height="480" style="border:0"></iframe>
@@ -138,11 +129,8 @@ locally with Node.js 20 or later:
 node tidigar-link.mjs --validate "<finished URL>"
 ```
 
-It prints dates, dependencies, record counts and fragment length, and reports
-any corrections Tidigar would make. Exit 0 means it opens without corrections;
-exit 1 means invalid input or corrections to review. Fix the original link and
-check again if desired. It sends nothing anywhere. Tidigar also checks the
-link when opened and reports any corrections or problems.
+Exit 0 means the link opens without corrections. Exit 1 reports invalid
+input or corrections to review. The script runs locally.
 
 ## Reference, only when needed
 

@@ -86,7 +86,9 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
     shares. Dependencies MUST NOT form a cycle.
   - **Progress** as `0p`, `25p`, `50p`, `75p` or `100p`. An option whose
     name looks like this is written with its dimension, such as `Size:50p`.
-  - `d=` a description.
+  - `d=` carries the activity's [Markdown source](https://tidigar.com/agents/docs/file-format.md#item-activity).
+    Preserve whitespace and line breaks with the text escapes below. The
+    fragment limit applies to the whole link.
 
 ### Milestones and periods
 
@@ -121,8 +123,11 @@ for color. Links omit assignee settings.
 - `_` is a space.
 - In a title, a note or a name, write these characters escaped: `~` `%7E`,
   `/` `%2F`, `_` `%5F`, `%` `%25`, `&` `%26`, `#` `%23`, `(` `%28`, `)`
-  `%29`, `"` `%22`, `<` `%3C` and `>` `%3E`. In a dimension or option name
-  also `,` `%2C`, `:` `%3A`, `@` `%40` and `=` `%3D`.
+  `%29`, `"` `%22`, `<` `%3C`, `>` `%3E`, backtick `%60`, `{` `%7B`,
+  `}` `%7D`, `[` `%5B`, `]` `%5D`, vertical bar `%7C`, backslash `%5C`
+  and `^` `%5E`. Encode a line feed as `%0A`, a carriage return as `%0D`
+  and a tab as `%09`. In a dimension or option name also escape `,` `%2C`,
+  `:` `%3A`, `@` `%40` and `=` `%3D`.
 - Other characters, such as å, ä, ö or `–`, are written as they are.
 - Titles are up to 180 characters, names up to 100, the roadmap's description
   up to 500.
