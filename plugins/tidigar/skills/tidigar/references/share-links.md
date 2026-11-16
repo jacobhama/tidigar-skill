@@ -44,6 +44,7 @@ installed and claims the link. The opener is not deployed yet; until it is,
 | `d=Text`                | its description                                               |
 | `y=2026`                | its year, required: the year of every `MM-DD` date            |
 | `w`                     | plans in work days: Monday to Friday, without periods         |
+| `k=SEK` | the plan currency for estimated costs, when present |
 | `r=KEY`                 | the reference key prefix, up to 10 capital letters and digits |
 | `m1=Team:Design,Build`  | a dimension and its options, in order                         |
 | `a1=title/start/days/…` | an activity                                                   |
@@ -84,6 +85,9 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
     passed (`0`, `25`, `50` or `75`). Links involving undated activities
     preserve dependency order without constraining dates or allowing overlap
     shares. Dependencies MUST NOT form a cycle.
+  - **Estimated cost** as `cost=1250000` in the currency’s minor units. Set
+    the plan currency with `k=SEK` (also supports EUR, USD, GBP, NOK and DKK).
+    Omit the field for an unestimated activity.
   - **Progress** as `0p`, `25p`, `50p`, `75p` or `100p`. An option whose
     name looks like this is written with its dimension, such as `Size:50p`.
   - `d=` carries the activity's [Markdown source](https://tidigar.com/agents/docs/file-format.md#item-activity).

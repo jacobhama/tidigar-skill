@@ -31,7 +31,7 @@ const scope = { crypto: globalThis.crypto };
  *   {
  *     manifest: {
  *       projectId, formatVersion, name, description, dimensions, year,
- *       timeZone, nightHours
+ *       timeZone, nightHours, costCurrency
  *     },
  *     items, sharedViews
  *   }
@@ -70,6 +70,11 @@ const scope = { crypto: globalThis.crypto };
   const DEPENDENCY_ARROW_MODES = new Set(['none', 'grouped', 'every']);
   const FLOW_DIRECTIONS = new Set(['auto', 'horizontal', 'vertical']);
   const SCHEDULES = new Set(['calendar-days', 'work-days']);
+  const COST_CURRENCIES = Object.freeze(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']);
+  const MAX_ESTIMATED_COST = 99999999999;
+  const validEstimatedCost = (value) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= MAX_ESTIMATED_COST;
+
   // The reserved axis that arranges activities by who they are assigned to
   // in a Tidigar Cloud plan. It holds no people; dimension IDs are UUIDs, so
   // it never names a dimension.
@@ -592,6 +597,9 @@ const scope = { crypto: globalThis.crypto };
       invalid('manifest.formatVersion', `must be ${FORMAT_VERSION}`);
     const timeZone =
       source.timeZone === undefined ? undefined : zoneValue(source.timeZone, 'manifest.timeZone');
+    const { costCurrency } = source;
+    if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
+      invalid('manifest.costCurrency', 'expected a supported currency');
     const nightHours = source.nightHours === undefined ? undefined : nightValue(source.nightHours);
     const projectId = uuidValue(source.projectId, 'manifest.projectId');
     if (registry.has(projectId)) invalid('manifest.projectId', 'duplicate ID');
@@ -629,6 +637,7 @@ const scope = { crypto: globalThis.crypto };
       year: source.year,
       schedule,
       ...(nightHours ? { nightHours } : {}),
+      ...(costCurrency ? { costCurrency } : {}),
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
       // Only a project with reference keys carries its prefix.
       ...(refPrefix ? { refPrefix } : {}),
@@ -919,8 +928,8 @@ const scope = { crypto: globalThis.crypto };
   // Fields a record of one type must leave out.
   const FOREIGN_FIELDS = Object.freeze({
     activity: Object.freeze(['fixed', 'source']),
-    milestone: Object.freeze(['end', 'startAfter']),
-    period: Object.freeze(['progress', 'startAfter', 'assignee', 'fixed']),
+    milestone: Object.freeze(['end', 'startAfter', 'estimatedCostMinor']),
+    period: Object.freeze(['progress', 'startAfter', 'assignee', 'fixed', 'estimatedCostMinor']),
   });
 
   function normalizeActivity(source, path, base) {
@@ -936,6 +945,9 @@ const scope = { crypto: globalThis.crypto };
     if (isClock(start) && source.startAfter !== undefined)
       invalid(`${path}.startAfter`, 'only day records overlap');
     const startAfter = normalizeStartAfter(source.startAfter, base.dependsOn, `${path}.startAfter`);
+    const { estimatedCostMinor } = source;
+    if (estimatedCostMinor !== undefined && !validEstimatedCost(estimatedCostMinor))
+      invalid(`${path}.estimatedCostMinor`, 'expected a non-negative amount in minor units');
     const assignee = assigneeValue(source.assignee, `${path}.assignee`);
     const record = {
       id: base.id,
@@ -943,6 +955,7 @@ const scope = { crypto: globalThis.crypto };
       title: base.title,
       description: base.description,
       progress,
+      ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
       ...(dated ? { start, end } : {}),
       values: base.values,
       dependsOn: base.dependsOn,
@@ -1124,6 +1137,7 @@ const scope = { crypto: globalThis.crypto };
       'dependsOn',
       'description',
       'progress',
+      'estimatedCostMinor',
       ...dimensions,
     ]);
     return views.map((view, index) => {
@@ -1457,6 +1471,8 @@ const scope = { crypto: globalThis.crypto };
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
     const items = normalizeItems(source.items, manifest, registry);
+    if (!manifest.costCurrency && items.some((item) => item.estimatedCostMinor !== undefined))
+      invalid('manifest.costCurrency', 'required when an activity has an estimated cost');
     const sharedViews = normalizeViews(source.sharedViews, manifest, registry);
     return { manifest, items, sharedViews };
   }
@@ -1746,6 +1762,8 @@ const scope = { crypto: globalThis.crypto };
   return {
     uuid,
     maxViews: MAX_VIEWS,
+    costCurrencies: COST_CURRENCIES,
+    validEstimatedCost,
     assigneeAxis: ASSIGNEE_AXIS,
     validAssignee,
     withoutAssignees,
@@ -2433,6 +2451,7 @@ const scope = { crypto: globalThis.crypto };
           'dependsOn',
           'startAfter',
           'ref',
+          'estimatedCostMinor',
         ]);
         const where = `activity ${label('i', index, titleOf(rawEntry))}`;
         if (!Array.isArray(entry))
@@ -2486,7 +2505,18 @@ const scope = { crypto: globalThis.crypto };
         });
         while (keptParts.length && keptParts[keptParts.length - 1] === 100) keptParts.pop();
         const ref = textOf(entry[8], where, 'key', 32);
-        return [title, start, length, description, progress, values, kept, keptParts, ref];
+        return [
+          title,
+          start,
+          length,
+          description,
+          progress,
+          values,
+          kept,
+          keptParts,
+          ref,
+          ...(entry[9] == null ? [] : [entry[9]]),
+        ];
       });
 
       payload.s = rawMilestones.map((rawEntry, position) => {
@@ -2859,7 +2889,7 @@ const scope = { crypto: globalThis.crypto };
       if (lists[letter] && number) {
         if (lists[letter].has(Number(number))) note(key, 'appears twice; the second was ignored');
         else lists[letter].set(Number(number), value);
-      } else if (['n', 'd', 'y', 'w', 'r', 'v', 'c'].includes(key)) {
+      } else if (['n', 'd', 'y', 'w', 'r', 'v', 'c', 'k'].includes(key)) {
         if (fields.has(key)) note(key, 'appears twice; the second was ignored');
         else fields.set(key, value);
       } else note(key, 'is not a record Tidigar knows and was ignored');
@@ -2884,6 +2914,7 @@ const scope = { crypto: globalThis.crypto };
       payload.w = 1;
       if (fields.get('w')) note('w', 'is a flag and takes no value');
     }
+    if (fields.has('k')) payload.k = text(fields.get('k'));
     if (fields.has('r')) payload.r = text(fields.get('r'));
 
     // The year: given, or the first full date's, or this year.
@@ -3057,10 +3088,15 @@ const scope = { crypto: globalThis.crypto };
       let dependencies = [[], []];
       let progress = 0;
       let description = '';
+      let cost = null;
       for (const field of rest) {
         if (!field) continue;
         if (field.startsWith('d=')) description = text(field.slice(2));
-        else if (field.startsWith('@')) dependencies = dependenciesOf(field.slice(1), where);
+        else if (field.startsWith('cost=')) {
+          const amount = field.slice(5);
+          if (!/^\d+$/.test(amount)) failAt(where, 'cost must be an integer in minor units');
+          else cost = Number(amount);
+        } else if (field.startsWith('@')) dependencies = dependenciesOf(field.slice(1), where);
         else if (/^\d+p$/.test(field)) progress = Number(field.slice(0, -1));
         // As people write it by hand.
         else if (/^\d+(%|%25)$/.test(field)) progress = Number(field.replace(/%.*/, ''));
@@ -3077,6 +3113,7 @@ const scope = { crypto: globalThis.crypto };
         values,
         dependencies[0],
         dependencies[1],
+        ...(cost === null ? [] : ['', cost]),
       ];
     });
     // Milestones: `title/date`, `-` for none, then `@dependencies` and `fixed`.
@@ -3255,6 +3292,7 @@ const scope = { crypto: globalThis.crypto };
     if (payload.d) records.push(`d=${field(payload.d)}`);
     records.push(`y=${year}`);
     if (payload.w === 1) records.push('w');
+    if (payload.k) records.push(`k=${field(payload.k)}`);
     if (payload.r) records.push(`r=${field(payload.r)}`);
     dimensions.forEach(([dimension, options], index) =>
       records.push(
@@ -3272,6 +3310,8 @@ const scope = { crypto: globalThis.crypto };
           values = [],
           dependsOn = [],
           parts = [],
+          ,
+          cost,
         ],
         index,
       ) => {
@@ -3301,6 +3341,7 @@ const scope = { crypto: globalThis.crypto };
               .join(',')}`,
           );
         if (progress) fields.push(`${progress}p`);
+        if (cost != null) fields.push(`cost=${cost}`);
         if (description) fields.push(`d=${field(description)}`);
         records.push(`a${index + 1}=${fields.join('/')}`);
       },
@@ -3412,6 +3453,7 @@ const scope = { crypto: globalThis.crypto };
     'dependsOn',
     'description',
     'progress',
+    'estimatedCostMinor',
   ]);
 
   class ShareLinkError extends Error {
@@ -3837,6 +3879,7 @@ const scope = { crypto: globalThis.crypto };
       }
 
       const payload = { n: manifest.name, y: manifest.year };
+      if (manifest.costCurrency) payload.k = manifest.costCurrency;
       if (manifest.description) payload.d = manifest.description;
       if (manifest.schedule === 'work-days') payload.w = 1;
       if (manifest.timeZone) payload.z = manifest.timeZone;
@@ -3863,8 +3906,9 @@ const scope = { crypto: globalThis.crypto };
                 item.dependsOn.map(() => 100),
               ),
               item.ref ?? '',
+              item.estimatedCostMinor,
             ],
-            [null, null, null, '', 0, [], [], [], ''],
+            [null, null, null, '', 0, [], [], [], '', undefined],
           ),
         );
       if (milestones.length)
@@ -4107,6 +4151,7 @@ const scope = { crypto: globalThis.crypto };
         manifest: {
           projectId,
           formatVersion: model.formatVersion,
+          ...(payload.k === undefined ? {} : { costCurrency: payload.k }),
           ...(payload.z === undefined ? {} : { timeZone: payload.z }),
           ...(payload.h === undefined ? {} : { nightHours: payload.h }),
           ...(payload.c === undefined ? {} : { shareLinkCreatedAt: payload.c }),
@@ -4129,6 +4174,7 @@ const scope = { crypto: globalThis.crypto };
               dependsOn,
               parts,
               ref = '',
+              cost = null,
             ] = entry;
             const choices = list(values);
             const predecessorIds = list(dependsOn).map((position) => at(predecessors, position));
@@ -4148,6 +4194,7 @@ const scope = { crypto: globalThis.crypto };
               title,
               description,
               progress,
+              ...(cost === null ? {} : { estimatedCostMinor: cost }),
               ...(start === null && length === null
                 ? {}
                 : { start: time(start), end: until(start, length) }),
@@ -4327,6 +4374,7 @@ const scope = { crypto: globalThis.crypto };
                     'dependsOn',
                     'description',
                     'progress',
+                    'estimatedCostMinor',
                   ].includes(column) || dimensionIds.has(column),
               );
           if (
@@ -4388,9 +4436,16 @@ const scope = { crypto: globalThis.crypto };
       for (const key of COLUMN_FIELDS)
         view[key] = view[key].filter(
           (column) =>
-            ['title', 'duration', 'start', 'end', 'dependsOn', 'description', 'progress'].includes(
-              column,
-            ) || known.has(column),
+            [
+              'title',
+              'duration',
+              'start',
+              'end',
+              'dependsOn',
+              'description',
+              'progress',
+              'estimatedCostMinor',
+            ].includes(column) || known.has(column),
         );
       if (view.listSort && !LIST_KEYS.has(view.listSort) && !known.has(view.listSort))
         view.listSort = '';
@@ -4754,6 +4809,7 @@ const scope = { crypto: globalThis.crypto };
       'version',
       'name',
       'description',
+      'costCurrency',
       'workDays',
       'dimensions',
       'activities',
@@ -4766,6 +4822,7 @@ const scope = { crypto: globalThis.crypto };
       'start',
       'end',
       'description',
+      'estimatedCostMinor',
       'progress',
       'values',
       'dependsOn',
@@ -4833,6 +4890,12 @@ const scope = { crypto: globalThis.crypto };
     record(plan, 'plan', 'plan');
     if (plan.version !== undefined && plan.version !== 1) fail('version', 'must be 1');
     const name = text(plan.name, 'name');
+    const { costCurrency } = plan;
+    if (
+      costCurrency !== undefined &&
+      !['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(costCurrency)
+    )
+      fail('costCurrency', 'expected a supported currency');
 
     // Dimensions keep the order they are declared in, then the order an
     // activity first names them; options likewise.
@@ -4959,12 +5022,24 @@ const scope = { crypto: globalThis.crypto };
           fail(`${path}.startAfter[${position}]`, 'a milestone or a period requires 100');
       });
       while (startAfter.at(-1) === 100) startAfter.pop();
+      const { estimatedCostMinor } = activity;
+      if (estimatedCostMinor !== undefined) {
+        if (
+          !Number.isSafeInteger(estimatedCostMinor) ||
+          estimatedCostMinor < 0 ||
+          estimatedCostMinor > 99999999999
+        )
+          fail(`${path}.estimatedCostMinor`, 'expected a non-negative amount in minor units');
+        if (costCurrency === undefined)
+          fail('costCurrency', 'required when an activity has an estimated cost');
+      }
       return {
         title: text(activity.title, `${path}.title`, ''),
         start,
         length: end - start,
         description: text(activity.description, `${path}.description`, ''),
         progress: activity.progress ?? 0,
+        estimatedCostMinor,
         values,
         dependsOn,
         startAfter,
@@ -5018,6 +5093,7 @@ const scope = { crypto: globalThis.crypto };
     };
     const payload = { n: name, y: year };
     if (plan.description !== undefined) payload.d = text(plan.description, 'description');
+    if (costCurrency !== undefined) payload.k = costCurrency;
     if (plan.workDays) payload.w = 1;
     if (dimensions.length)
       payload.m = dimensions.map((dimension) => [
@@ -5036,8 +5112,10 @@ const scope = { crypto: globalThis.crypto };
             packedValues(item.values),
             item.dependsOn,
             item.startAfter,
+            '',
+            item.estimatedCostMinor,
           ],
-          [null, null, null, '', 0, [], [], []],
+          [null, null, null, '', 0, [], [], [], '', undefined],
         ),
       );
     if (milestones.length)
@@ -5159,6 +5237,7 @@ const scope = { crypto: globalThis.crypto };
     };
     const plan = { $schema: SCHEMA, version: 1, name: payload.n };
     if (payload.d) plan.description = payload.d;
+    if (payload.k) plan.costCurrency = payload.k;
     if (payload.w === 1) plan.workDays = true;
     if (dimensions.length)
       plan.dimensions = Object.fromEntries(
@@ -5182,9 +5261,12 @@ const scope = { crypto: globalThis.crypto };
           values = [],
           dependsOn = [],
           startAfter = [],
+          ,
+          amount,
         ]) => {
           const activity = { title, start: day(start), end: day(start + length) };
           if (description) activity.description = description;
+          if (amount != null) activity.estimatedCostMinor = amount;
           if (progress) activity.progress = progress;
           const chosen = valuesOf(values);
           if (chosen) activity.values = chosen;

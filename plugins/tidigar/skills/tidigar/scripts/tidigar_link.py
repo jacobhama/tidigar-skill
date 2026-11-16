@@ -12,9 +12,9 @@ VIEW = {"type": "view", "groupBy": "group", "colorBy": "color", "rows": "row",
 # classic: one activity per row under a fixed label, as in MS Project; compact: shared rows.
 LAYOUTS = {"classic": "single-label", "compact": "compact"}
 STYLES = ["standard", "minimal", "airy", "contrast", "terminal"]
-KEYS = {"plan": ["$schema", "version", "name", "description", "workDays", "dimensions",
+KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
-        "activity": ["title", "start", "end", "description", "progress", "values", "dependsOn", "startAfter"],
+        "activity": ["title", "start", "end", "description", "estimatedCostMinor", "progress", "values", "dependsOn", "startAfter"],
         "milestone": ["title", "start", "values", "dependsOn", "fixed"],
         "period": ["title", "start", "end", "values"],
         "option": ["name", "color"], "view": list(VIEW)}
@@ -95,6 +95,9 @@ def to_payload(plan):
     if plan.get("version", 1) != 1:
         fail("version", "must be 1")
     name = text(plan.get("name"), "name", 100, True)
+    currency = plan.get("costCurrency")
+    if "costCurrency" in plan and currency not in ("SEK", "EUR", "USD", "GBP", "NOK", "DKK"):
+        fail("costCurrency", "expected a supported currency")
     dims = {}  # dimension name -> [[option, color], ...], in order
 
     def dimension(key, path):
@@ -210,10 +213,17 @@ def to_payload(plan):
                 fail(f"{path}.startAfter[{position}]", "a milestone or a period requires 100")
         while shares and shares[-1] == 100:
             shares.pop()
+        amount = a.get("estimatedCostMinor")
+        if "estimatedCostMinor" in a:
+            if type(amount) not in (int, float) or not 0 <= amount <= 99_999_999_999 or amount != int(amount):
+                fail(f"{path}.estimatedCostMinor", "expected a non-negative amount in minor units")
+            if currency is None:
+                fail("costCurrency", "required when an activity has an estimated cost")
+            amount = int(amount)
         dated += [start, end]
         rows.append([text(a.get("title", ""), f"{path}.title", 180), start, end - start,
                      text(a.get("description", ""), f"{path}.description", 10**6), progress,
-                     values, dep, path, shares])
+                     values, dep, path, shares, amount])
     for i, m in enumerate(points):
         path = named(f"milestones[{i}]", m)
         date = day(m.get("start"), f"{path}.start")
@@ -284,13 +294,16 @@ def to_payload(plan):
                "c": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     if "description" in plan:
         payload["d"] = text(plan["description"], "description", 500)
+    if currency is not None:
+        payload["k"] = currency
     if plan.get("workDays"):
         payload["w"] = 1
     if dims:
         payload["m"] = [[key, options] for key, options in dims.items()]
     if rows:
-        payload["i"] = [trim([t, s - base, n, d, pr, packed(v), dep, shares],
-                             [None, None, None, "", 0, [], [], []]) for t, s, n, d, pr, v, dep, _, shares in rows]
+        payload["i"] = [trim([t, s - base, n, d, pr, packed(v), dep, shares, "", amount],
+                             [None, None, None, "", 0, [], [], [], "", None])
+                        for t, s, n, d, pr, v, dep, _, shares, amount in rows]
     if marks:
         payload["s"] = [trim([t, d - base, dep, f, "", "", 0, packed(v)], [None, None, [], 0, "", "", 0, []])
                         for t, d, dep, f, _, v in marks]
@@ -398,6 +411,8 @@ def link(payload):
     out.append(f"y={year}")
     if payload.get("w") == 1:
         out.append("w")
+    if payload.get("k"):
+        out.append(f"k={field(payload['k'])}")
     for k, (dim, options) in enumerate(dims):
         out.append(f"m{k + 1}={name(dim)}:" + ",".join(name(o) for o, _ in options))
     for k, row in enumerate(rows):
@@ -417,6 +432,8 @@ def link(payload):
                                         for i, x in enumerate(after)))
         if progress:
             parts.append(f"{progress}p")
+        if len(row) > 9:
+            parts.append(f"cost={row[9]}")
         if description:
             parts.append(f"d={field(description)}")
         out.append(f"a{k + 1}=" + "/".join(parts))
@@ -553,15 +570,24 @@ def payload_of(url):
         title, start, length, *rest = value.split("/") + ["", ""]
         first = day(start, where)
         row = [text(title), first, end(first, count(length, where)), "", 0, [], [], []]
+        amount = None
         for part in rest:
             if part.startswith("d="):
                 row[3] = text(part[2:])
+            elif part.startswith("cost="):
+                value = part[5:]
+                if not re.fullmatch(r"\d{1,11}", value) or not 0 <= int(value) <= 99_999_999_999:
+                    problems.append(f"{where}: cost must be an integer in minor units")
+                else:
+                    amount = int(value)
             elif part.startswith("@"):
                 row[6], row[7] = after(part[1:], where)
             elif re.fullmatch(r"\d+p", part):
                 row[4] = int(part[:-1])
             elif part:
                 row[5] = option_numbers(part, where)
+        if amount is not None:
+            row += ["", amount]
         rows.append(row)
     marks = []
     for number, value in ordered["s"]:
@@ -573,6 +599,8 @@ def payload_of(url):
     payload = {"n": text(fields.get("n", "Roadmap")), "y": year}
     if fields.get("d"):
         payload["d"] = text(fields["d"])
+    if "k" in fields:
+        payload["k"] = text(fields["k"])
     if "w" in fields:
         payload["w"] = 1
     for key, value in (("m", dims), ("i", rows), ("s", marks), ("p", bands)):
@@ -621,6 +649,8 @@ def read(url):
     plan = {"version": 1, "name": payload["n"]}
     if payload.get("d"):
         plan["description"] = payload["d"]
+    if payload.get("k"):
+        plan["costCurrency"] = payload["k"]
     if payload.get("w") == 1:
         plan["workDays"] = True
     if dims:
@@ -637,6 +667,8 @@ def read(url):
                 activity["description"] = description
             if progress:
                 activity["progress"] = progress
+            if len(row) > 9:
+                activity["estimatedCostMinor"] = row[9]
             if chosen(values):
                 activity["values"] = chosen(values)
             if after:
