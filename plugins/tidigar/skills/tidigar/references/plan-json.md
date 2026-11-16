@@ -115,6 +115,7 @@ python3 tidigar_link.py --read "<link>" > plan.json
 
 Edit the plan and run either builder again. `--read` reports any corrections made while reading; use
 the JavaScript module's `--validate "<link>"` to check a finished link without rewriting it.
+Plan JSON v1 supports `t=1` links. Open `t=2` links in Tidigar to retain their baseline and actuals.
 `--embed plan.json` prints iframe code. The
 [plan schema](https://tidigar.com/agents/schema/plan-v1.json) describes the JSON fields;
 cross-record rules are checked by Tidigar and the builders.

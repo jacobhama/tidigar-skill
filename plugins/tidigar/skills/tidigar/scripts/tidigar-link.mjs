@@ -31,7 +31,7 @@ const scope = { crypto: globalThis.crypto };
  *   {
  *     manifest: {
  *       projectId, formatVersion, name, description, dimensions, year,
- *       timeZone, nightHours, costCurrency, costUnit
+ *       timeZone, nightHours, costCurrency, costUnit, baseline
  *     },
  *     items, sharedViews
  *   }
@@ -238,12 +238,14 @@ const scope = { crypto: globalThis.crypto };
   const timeOf = (value) => timeScale(value).parse(value);
   /** The first moment after a record's end, in that record's unit. */
   const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
+  // A milestone is due at its moment, an activity at its end.
+  const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
   const followUpClocks = new Map();
-  /** Derived from the plan's wall clock, with no stored status to go stale. */
-  function followUpStatus(item, { now = Date.now(), timeZone } = {}) {
-    if (Number(item.progress) === 100) return 'done';
-    // A milestone is due at its moment, an activity at its end.
-    const due = item.type === 'milestone' ? item.start : item.end;
+  /** Derived from the plan's wall clock and, when supplied, a recorded finish. */
+  function followUpStatus(item, { now = Date.now(), timeZone, actualFinish, baselineDue } = {}) {
+    const due = scheduledFinish(item);
+    if (Number(item.progress) === 100)
+      return timeOf(actualFinish) >= timeAfter(baselineDue ?? due) ? 'done-late' : 'done';
     if (!due) return 'undated';
     let clock = followUpClocks.get(timeZone);
     if (!clock) {
@@ -266,6 +268,96 @@ const scope = { crypto: globalThis.crypto };
     if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
     return due.slice(0, 10) === today ? 'today' : 'upcoming';
   }
+  // Only two clock values imply a minute comparison. A day value carries
+  // no time of day, so compare calendar dates when either side is a day.
+  function scheduleVariance(baseline, value) {
+    const baselineTime = timeOf(baseline);
+    const comparedTime = timeOf(value);
+    if (!Number.isFinite(baselineTime) || !Number.isFinite(comparedTime)) return null;
+    if (isClock(baseline) && isClock(value))
+      return { unit: 'minutes', value: (comparedTime - baselineTime) / MINUTE };
+    return { unit: 'days', value: Math.floor(comparedTime / DAY) - Math.floor(baselineTime / DAY) };
+  }
+
+  const activityField = (item, field) =>
+    item && kindOf(item) === 'activity' ? item[field] : undefined;
+  const trackingCost = (item, field) => {
+    const amount = activityField(item, field);
+    return validEstimatedCost(amount) ? amount : null;
+  };
+
+  function trackingVariance(baseline, start, finish, cost) {
+    const budget = trackingCost(baseline, 'estimatedCostMinor');
+    return {
+      start: scheduleVariance(activityField(baseline, 'start'), start),
+      finish: scheduleVariance(scheduledFinish(baseline), finish),
+      costMinor: budget === null || cost === null ? null : cost - budget,
+    };
+  }
+
+  function summarizeTrackingCosts(amounts) {
+    let totalMinor = 0;
+    let known = 0;
+    for (const amount of amounts) {
+      if (amount === null) continue;
+      totalMinor += amount;
+      known += 1;
+    }
+    return { totalMinor: known ? totalMinor : null, known, eligible: amounts.length };
+  }
+
+  /** Compare baseline and live records in the same plan currency by stable ID. */
+  function compareBaseline(baselineItems, currentItems) {
+    const trackedById = (items) =>
+      new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
+    const baselineById = trackedById(baselineItems);
+    const currentById = trackedById(currentItems);
+    const amounts = { baseline: [], current: [], actual: [], vsCurrent: [], vsActual: [] };
+    const rows = [];
+    for (const id of new Set([...currentById.keys(), ...baselineById.keys()])) {
+      const baseline = baselineById.get(id);
+      const current = currentById.get(id);
+      const currentCost = trackingCost(current, 'estimatedCostMinor');
+      const actualCost = trackingCost(current, 'actualCostMinor');
+      const vsCurrent = trackingVariance(
+        baseline,
+        activityField(current, 'start'),
+        scheduledFinish(current),
+        currentCost,
+      );
+      const vsActual = trackingVariance(
+        baseline,
+        activityField(current, 'actualStart'),
+        current?.actualFinish,
+        actualCost,
+      );
+      rows.push({
+        id,
+        scope: !baseline ? 'added' : !current ? 'removed' : 'retained',
+        vsCurrent,
+        vsActual,
+      });
+
+      const baselineCanCarryCost = baseline && kindOf(baseline) === 'activity';
+      const currentCanCarryCost = current && kindOf(current) === 'activity';
+      if (baselineCanCarryCost) amounts.baseline.push(trackingCost(baseline, 'estimatedCostMinor'));
+      if (currentCanCarryCost) {
+        amounts.current.push(currentCost);
+        amounts.actual.push(actualCost);
+      }
+      if (baselineCanCarryCost && currentCanCarryCost) {
+        amounts.vsCurrent.push(vsCurrent.costMinor);
+        amounts.vsActual.push(vsActual.costMinor);
+      }
+    }
+    return {
+      rows,
+      cost: Object.fromEntries(
+        Object.entries(amounts).map(([key, values]) => [key, summarizeTrackingCosts(values)]),
+      ),
+    };
+  }
+
   /** The first moment at or after `time` where a record shaped like `like`
    * may start: a day record starts only at midnight. */
   const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
@@ -591,6 +683,99 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
+  function utcTimestamp(value, path) {
+    if (
+      typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) ||
+      new Date(value).toISOString().replace('.000Z', 'Z') !== value
+    )
+      invalid(path, 'must be a UTC ISO 8601 timestamp with whole seconds');
+    return value;
+  }
+
+  function baselineItem(item) {
+    const { id, type, start, end, estimatedCostMinor } = item;
+    return {
+      id,
+      ...(type === 'milestone' ? { type } : {}),
+      ...(start === undefined ? {} : { start }),
+      ...(end === undefined ? {} : { end }),
+      ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
+    };
+  }
+
+  function baselineItems(items) {
+    return items
+      .filter((item) => kindOf(item) !== 'period')
+      .map(baselineItem)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  function normalizeBaseline(value) {
+    const path = 'manifest.baseline';
+    const source = requireRecord(value, path);
+    const { capturedAt, costCurrency } = source;
+    exactKeys(
+      source,
+      ['capturedAt', 'items', ...(costCurrency === undefined ? [] : ['costCurrency'])],
+      path,
+    );
+    utcTimestamp(capturedAt, path + '.capturedAt');
+    if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
+      invalid(path + '.costCurrency', 'expected a supported currency');
+    const ids = makeIdRegistry();
+    const items = requireArray(source.items, path + '.items', MAX_ITEMS).map((record, index) => {
+      const where = path + '.items[' + index + ']';
+      const item = requireRecord(record, where);
+      const { type, start, end, estimatedCostMinor } = item;
+      if (type !== undefined && type !== 'milestone')
+        invalid(where + '.type', 'must be a milestone or omitted for an activity');
+      const fields =
+        type === 'milestone'
+          ? ['id', 'type', 'start']
+          : ['id', 'start', 'end', 'estimatedCostMinor'];
+      if (Object.keys(item).some((key) => !fields.includes(key)))
+        invalid(where, 'contains unsupported fields');
+      const id = ids.add(item.id, where + '.id');
+      if (start !== undefined) scaleValue(start, where + '.start');
+      if (end !== undefined) scaleValue(end, where + '.end');
+      if (
+        type === undefined &&
+        ((start === undefined) !== (end === undefined) ||
+          isClock(start) !== isClock(end) ||
+          start > end)
+      )
+        invalid(where, 'expected an ordered range with matching precision or no dates');
+      if (
+        estimatedCostMinor !== undefined &&
+        (!costCurrency || !validEstimatedCost(estimatedCostMinor))
+      )
+        invalid(
+          where + '.estimatedCostMinor',
+          'expected a supported currency and amount in minor units',
+        );
+      return baselineItem({ ...item, id });
+    });
+    return { capturedAt, ...(costCurrency ? { costCurrency } : {}), items: baselineItems(items) };
+  }
+
+  function captureBaseline(project, capturedAt) {
+    const { costCurrency } = project.manifest;
+    return {
+      capturedAt: utcTimestamp(capturedAt, 'capturedAt'),
+      ...(costCurrency ? { costCurrency } : {}),
+      items: baselineItems(project.items),
+    };
+  }
+
+  const hasPlanCosts = (project) =>
+    project.items.some(
+      (item) => item.estimatedCostMinor !== undefined || item.actualCostMinor !== undefined,
+    ) ||
+    (project.manifest.baseline?.items.some((item) => item.estimatedCostMinor !== undefined) ??
+      false);
+
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
     if (source.formatVersion !== FORMAT_VERSION)
@@ -611,14 +796,14 @@ const scope = { crypto: globalThis.crypto };
     if (!Number.isInteger(source.year) || source.year < 1900 || source.year > 2200)
       invalid('manifest.year', 'must be an integer from 1900 through 2200');
     const shareLinkCreatedAt = source.shareLinkCreatedAt;
+    if (shareLinkCreatedAt !== undefined)
+      utcTimestamp(shareLinkCreatedAt, 'manifest.shareLinkCreatedAt');
+    const baseline = source.baseline === undefined ? undefined : normalizeBaseline(source.baseline);
     if (
-      shareLinkCreatedAt !== undefined &&
-      (typeof shareLinkCreatedAt !== 'string' ||
-        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(shareLinkCreatedAt) ||
-        !Number.isFinite(Date.parse(shareLinkCreatedAt)) ||
-        new Date(shareLinkCreatedAt).toISOString().replace('.000Z', 'Z') !== shareLinkCreatedAt)
+      baseline?.items.some((item) => item.estimatedCostMinor !== undefined) &&
+      baseline.costCurrency !== costCurrency
     )
-      invalid('manifest.shareLinkCreatedAt', 'must be a UTC ISO 8601 timestamp with whole seconds');
+      invalid('manifest.costCurrency', 'must match the baseline budget currency');
     const dimensions = normalizeDimensions(source.dimensions, registry);
     const schedule = source.schedule === undefined ? 'calendar-days' : source.schedule;
     if (!SCHEDULES.has(schedule))
@@ -641,6 +826,7 @@ const scope = { crypto: globalThis.crypto };
       ...(nightHours ? { nightHours } : {}),
       ...(costCurrency ? { costCurrency } : {}),
       ...(costUnit ? { costUnit } : {}),
+      ...(baseline ? { baseline } : {}),
       ...(shareLinkCreatedAt === undefined ? {} : { shareLinkCreatedAt }),
       // Only a project with reference keys carries its prefix.
       ...(refPrefix ? { refPrefix } : {}),
@@ -867,6 +1053,13 @@ const scope = { crypto: globalThis.crypto };
   function convertRecord(record, type) {
     const from = kindOf(record);
     if (
+      type !== 'activity' &&
+      (record.actualStart !== undefined ||
+        record.actualCostMinor !== undefined ||
+        (type === 'period' && record.actualFinish !== undefined))
+    )
+      throw new TypeError('Clear actuals that the new record kind cannot hold');
+    if (
       from === type ||
       !RECORD_KINDS.includes(type) ||
       record.source ||
@@ -892,6 +1085,7 @@ const scope = { crypto: globalThis.crypto };
     const common = {
       ...own,
       dependsOn: [...(record.dependsOn || [])],
+      ...(record.actualFinish === undefined ? {} : { actualFinish: record.actualFinish }),
       ...(record.assignee ? { assignee: record.assignee } : {}),
     };
     if (from === 'period') return { ...common, progress: 0, start: record.start, end: record.end };
@@ -931,9 +1125,43 @@ const scope = { crypto: globalThis.crypto };
   // Fields a record of one type must leave out.
   const FOREIGN_FIELDS = Object.freeze({
     activity: Object.freeze(['fixed', 'source']),
-    milestone: Object.freeze(['end', 'startAfter', 'estimatedCostMinor']),
-    period: Object.freeze(['progress', 'startAfter', 'assignee', 'fixed', 'estimatedCostMinor']),
+    milestone: Object.freeze([
+      'end',
+      'startAfter',
+      'estimatedCostMinor',
+      'actualStart',
+      'actualCostMinor',
+    ]),
+    period: Object.freeze([
+      'progress',
+      'startAfter',
+      'assignee',
+      'fixed',
+      'estimatedCostMinor',
+      'actualStart',
+      'actualFinish',
+      'actualCostMinor',
+    ]),
   });
+
+  function normalizeActuals(source, path) {
+    const { actualStart, actualFinish, actualCostMinor } = source;
+    if (actualStart !== undefined) scaleValue(actualStart, path + '.actualStart');
+    if (actualFinish !== undefined) scaleValue(actualFinish, path + '.actualFinish');
+    if (
+      actualStart !== undefined &&
+      actualFinish !== undefined &&
+      timeOf(actualStart) >= timeAfter(actualFinish)
+    )
+      invalid(path + '.actualFinish', 'must not be before actual start');
+    if (actualCostMinor !== undefined && !validEstimatedCost(actualCostMinor))
+      invalid(path + '.actualCostMinor', 'expected a non-negative amount in minor units');
+    return {
+      ...(actualStart === undefined ? {} : { actualStart }),
+      ...(actualFinish === undefined ? {} : { actualFinish }),
+      ...(actualCostMinor === undefined ? {} : { actualCostMinor }),
+    };
+  }
 
   function normalizeActivity(source, path, base) {
     const progress = source.progress === undefined ? 0 : source.progress;
@@ -959,6 +1187,7 @@ const scope = { crypto: globalThis.crypto };
       description: base.description,
       progress,
       ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
+      ...normalizeActuals(source, path),
       ...(dated ? { start, end } : {}),
       values: base.values,
       dependsOn: base.dependsOn,
@@ -988,6 +1217,7 @@ const scope = { crypto: globalThis.crypto };
       id: base.id,
       projectId: base.projectId,
       type: 'milestone',
+      ...normalizeActuals(source, path),
       title: base.title,
       description: base.description,
       progress,
@@ -1474,9 +1704,22 @@ const scope = { crypto: globalThis.crypto };
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
     const items = normalizeItems(source.items, manifest, registry);
-    if (!manifest.costCurrency && items.some((item) => item.estimatedCostMinor !== undefined))
-      invalid('manifest.costCurrency', 'required when an activity has an estimated cost');
+    if (
+      !manifest.costCurrency &&
+      items.some(
+        (item) => item.estimatedCostMinor !== undefined || item.actualCostMinor !== undefined,
+      )
+    )
+      invalid('manifest.costCurrency', 'required when an activity has a cost');
     const sharedViews = normalizeViews(source.sharedViews, manifest, registry);
+    if (manifest.baseline) {
+      const liveIds = new Set(items.map((item) => item.id));
+      if (manifest.baseline.items.some(({ id }) => registry.has(id) && !liveIds.has(id)))
+        invalid(
+          'manifest.baseline.items',
+          'a historical work ID cannot name other project metadata',
+        );
+    }
     return { manifest, items, sharedViews };
   }
 
@@ -1595,6 +1838,125 @@ const scope = { crypto: globalThis.crypto };
     return matches[0];
   }
 
+  const CALENDAR_BASELINE_VERSION = 3;
+  const CALENDAR_BASELINE_CHUNK_SIZE = 100;
+
+  async function calendarBaselineChunkID(items) {
+    // Match Swift's sorted ASCII JSON. Baseline rows contain only known keys,
+    // ASCII UUIDs and date strings, and integers.
+    const json = JSON.stringify(
+      items.map((item) =>
+        Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, item[key]]),
+        ),
+      ),
+    );
+    const crypto =
+      root.crypto || (typeof require === 'function' ? require('node:crypto').webcrypto : null);
+    const bytes = new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)),
+    ).slice(0, 16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      hex.slice(12, 16),
+      hex.slice(16, 20),
+      hex.slice(20),
+    ].join('-');
+  }
+
+  function calendarEnvelope(section, payload, version) {
+    return JSON.stringify({ format: CALENDAR_METADATA_FORMAT, version, section, payload });
+  }
+
+  /** Encode the manifest and content-addressed baseline Notes sections. */
+  async function serializeCalendarBaseline(project) {
+    const { dimensions, baseline, ...manifest } = normalizeProject(project).manifest;
+    if (!baseline) return { manifest: serializeCalendarMetadata(project, 'manifest'), chunks: [] };
+    const { items, ...header } = baseline;
+    const chunks = [];
+    for (let start = 0; start < items.length; start += CALENDAR_BASELINE_CHUNK_SIZE) {
+      const rows = items.slice(start, start + CALENDAR_BASELINE_CHUNK_SIZE);
+      chunks.push({
+        id: await calendarBaselineChunkID(rows),
+        notes: calendarEnvelope('baseline', { baseline: rows }, CALENDAR_BASELINE_VERSION),
+      });
+    }
+    manifest.baseline = { ...header, chunks: chunks.map(({ id }) => id) };
+    return {
+      manifest: calendarEnvelope('manifest', { manifest }, CALENDAR_BASELINE_VERSION),
+      chunks,
+    };
+  }
+
+  /** Assemble a snapshot only after all declared chunks are present and verified. */
+  async function deserializeCalendarBaseline(manifestText, chunks = []) {
+    function decode(value, section) {
+      const envelope = requireRecord(parseJsonInput(value, 'calendarMetadata'), 'calendarMetadata');
+      exactKeys(envelope, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
+      if (
+        envelope.format !== CALENDAR_METADATA_FORMAT ||
+        envelope.section !== section ||
+        envelope.version !== CALENDAR_BASELINE_VERSION
+      )
+        invalid('calendarMetadata', 'unsupported tracking envelope');
+      const payload = requireRecord(envelope.payload, 'calendarMetadata.payload');
+      exactKeys(payload, [section], 'calendarMetadata.payload');
+      return payload[section];
+    }
+    const envelope = parseJsonInput(manifestText, 'calendarMetadata');
+    if (envelope?.version === CALENDAR_METADATA_VERSION)
+      return deserializeCalendarMetadata(envelope, 'manifest');
+    const checked = requireRecord(decode(envelope, 'manifest'), 'manifest');
+    if (hasOwn(checked, 'dimensions')) invalid('manifest.dimensions', 'belong to dimension events');
+    const { chunks: ids, ...baseline } = requireRecord(checked.baseline, 'manifest.baseline');
+    exactKeys(
+      baseline,
+      ['capturedAt', ...(baseline.costCurrency === undefined ? [] : ['costCurrency'])],
+      'manifest.baseline',
+    );
+    const listed = requireArray(
+      ids,
+      'manifest.baseline.chunks',
+      MAX_ITEMS / CALENDAR_BASELINE_CHUNK_SIZE,
+    );
+    const seen = makeIdRegistry();
+    const notes = new Map();
+    for (const chunk of chunks) {
+      if (notes.has(chunk.id)) invalid('manifest.baseline.chunks', 'duplicate chunk');
+      notes.set(chunk.id, chunk.notes);
+    }
+    const items = [];
+    for (const [index, candidate] of listed.entries()) {
+      const id = seen.add(candidate, 'manifest.baseline.chunks');
+      if (!notes.has(id)) invalid('manifest.baseline.chunks', 'missing baseline chunk');
+      const rows = requireArray(
+        decode(notes.get(id), 'baseline'),
+        'baseline',
+        CALENDAR_BASELINE_CHUNK_SIZE,
+      );
+      if (
+        !rows.length ||
+        (index !== listed.length - 1 && rows.length !== CALENDAR_BASELINE_CHUNK_SIZE) ||
+        (await calendarBaselineChunkID(rows)) !== id
+      )
+        invalid('manifest.baseline.chunks', 'invalid baseline chunk');
+      items.push(...rows);
+    }
+    return {
+      manifest: deserializeManifest({
+        ...checked,
+        dimensions: [],
+        baseline: { ...baseline, items },
+      }),
+    };
+  }
+
   /*
    * The Notes envelope of a calendar metadata event. The manifest
    * event holds the manifest without its dimensions; each dimension and each
@@ -1604,6 +1966,8 @@ const scope = { crypto: globalThis.crypto };
     const normalized = normalizeProject(project);
     let payload;
     if (section === 'manifest') {
+      if (normalized.manifest.baseline)
+        invalid('manifest.baseline', 'encode its content-addressed calendar chunks');
       const { dimensions: _dimensions, ...manifest } = JSON.parse(
         serializeManifest(normalized.manifest),
       );
@@ -1767,6 +2131,8 @@ const scope = { crypto: globalThis.crypto };
     maxViews: MAX_VIEWS,
     costCurrencies: COST_CURRENCIES,
     validEstimatedCost,
+    captureBaseline,
+    hasPlanCosts,
     assigneeAxis: ASSIGNEE_AXIS,
     validAssignee,
     withoutAssignees,
@@ -1796,6 +2162,7 @@ const scope = { crypto: globalThis.crypto };
     timeOf,
     timeAfter,
     followUpStatus,
+    compareBaseline,
     startingAt,
     valueAt,
     maxRefLength: MAX_REF_LENGTH,
@@ -1818,6 +2185,8 @@ const scope = { crypto: globalThis.crypto };
     deserializeViews,
     serializeCalendarMetadata,
     deserializeCalendarMetadata,
+    serializeCalendarBaseline,
+    deserializeCalendarBaseline,
     encodeFile,
     decodeFile,
     encodeBackup,
@@ -2867,11 +3236,18 @@ const scope = { crypto: globalThis.crypto };
     };
     const records = String(fragment).replace(/^#/, '').split('~');
     const head = records.shift();
-    if (head !== `t=${VERSION}`)
+    const tracking = head === 't=2';
+    if (head !== `t=${VERSION}` && !tracking)
       throw Error(`t: expected t=${VERSION}, found ${JSON.stringify(head)}`);
 
     const fields = new Map();
-    const lists = { a: new Map(), s: new Map(), p: new Map(), m: new Map() };
+    const lists = {
+      a: new Map(),
+      s: new Map(),
+      p: new Map(),
+      m: new Map(),
+      ...(tracking ? { b: new Map(), x: new Map() } : {}),
+    };
     let ended = false;
     let last = 't';
     for (const [position, record] of records.entries()) {
@@ -2892,7 +3268,10 @@ const scope = { crypto: globalThis.crypto };
       if (lists[letter] && number) {
         if (lists[letter].has(Number(number))) note(key, 'appears twice; the second was ignored');
         else lists[letter].set(Number(number), value);
-      } else if (['n', 'd', 'y', 'w', 'r', 'v', 'c', 'k', 'u'].includes(key)) {
+      } else if (
+        ['n', 'd', 'y', 'w', 'r', 'v', 'c', 'k', 'u'].includes(key) ||
+        (tracking && key === 'b')
+      ) {
         if (fields.has(key)) note(key, 'appears twice; the second was ignored');
         else fields.set(key, value);
       } else note(key, 'is not a record Tidigar knows and was ignored');
@@ -3030,6 +3409,51 @@ const scope = { crypto: globalThis.crypto };
     const recordIndex = new Map(
       [...activities, ...milestones, ...periods].map(({ key }, index) => [key, index]),
     );
+    if (tracking) {
+      const time = (value) => (value === '-' ? null : value);
+      const amount = (value, where) =>
+        value === '-'
+          ? null
+          : /^\d+$/.test(value)
+            ? Number(value)
+            : failAt(where, 'expected an amount in minor units');
+      const reference = (value, where, historical) => {
+        if (recordIndex.has(value)) return recordIndex.get(value);
+        if (historical && /^[0-9a-f-]{36}$/i.test(value)) return value;
+        return failAt(where, 'unknown record ' + value);
+      };
+      if (fields.has('b')) {
+        const header = fields.get('b').split('/');
+        if (header.length !== 2) failAt('b', 'expected capture time and currency');
+        payload.b = [
+          header[0],
+          time(header[1]),
+          ordered(lists.b, 'b').map(({ key, value }) => {
+            const fields = value.split('/');
+            if (fields.length !== 5) return failAt(key, 'expected ID, kind, start, end and budget');
+            const [id, kind, start, end, budget] = fields;
+            if (!['activity', 'milestone'].includes(kind))
+              return failAt(key, 'unknown baseline record kind');
+            return [
+              reference(id, key, true),
+              kind === 'activity' ? null : kind,
+              time(start),
+              time(end),
+              amount(budget, key),
+            ];
+          }),
+        ];
+      } else if (lists.b.size) failAt('b', 'the baseline rows need a capture record');
+      if (lists.x.size)
+        payload.x = ordered(lists.x, 'x').map(({ key, value }) => {
+          const fields = value.split('/');
+          if (fields.length !== 4)
+            return failAt(key, 'expected ID, actual start, actual finish and actual cost');
+          const [id, start, finish, cost] = fields;
+          return [reference(id, key, false), time(start), time(finish), amount(cost, key)];
+        });
+      if (!payload.b && !payload.x) failAt('t', 'version 2 needs baseline or actuals data');
+    }
     // `@a1,a4,s2,a1:50`: predecessor indices and their start-after shares.
     const dependenciesOf = (list, where) => {
       const indices = [];
@@ -3292,7 +3716,8 @@ const scope = { crypto: globalThis.crypto };
         : index < items.length + milestones.length
           ? `s${index - items.length + 1}`
           : `p${index - items.length - milestones.length + 1}`;
-    const records = ['t=1', `n=${field(payload.n)}`];
+    const tracking = payload.b !== undefined || payload.x !== undefined;
+    const records = [tracking ? 't=2' : 't=1', `n=${field(payload.n)}`];
     if (payload.d) records.push(`d=${field(payload.d)}`);
     records.push(`y=${year}`);
     if (payload.w === 1) records.push('w');
@@ -3360,6 +3785,20 @@ const scope = { crypto: globalThis.crypto };
     periods.forEach(([title, start, length], index) =>
       records.push(`p${index + 1}=${field(title)}/${date(start)}/${length + 1}`),
     );
+    if (payload.b) {
+      const [capturedAt, currency, baseline] = payload.b;
+      records.push(`b=${capturedAt}/${currency ?? '-'}`);
+      for (const [index, [id, type, start, end, cost]] of baseline.entries()) {
+        const target = typeof id === 'number' ? keyOf(id) : id;
+        records.push(
+          `b${index + 1}=${[target, type ?? 'activity', start ?? '-', end ?? '-', cost ?? '-'].join('/')}`,
+        );
+      }
+    }
+    for (const [index, [id, start, finish, cost]] of (payload.x || []).entries())
+      records.push(
+        `x${index + 1}=${[keyOf(id), start ?? '-', finish ?? '-', cost ?? '-'].join('/')}`,
+      );
     if (payload.o) {
       const view = payload.o;
       const mode = { grid: 'board', timeline: 'timeline', list: 'list', flow: 'flow' }[
@@ -3420,6 +3859,8 @@ const scope = { crypto: globalThis.crypto };
   'use strict';
 
   const VERSION = 1;
+  const TRACKING_VERSION = 2;
+  const hasTracking = (payload) => payload?.b !== undefined || payload?.x !== undefined;
   // The band color a period's packed form carries, for older readers.
   const PERIOD_COLOR = '9aa7b5';
   // The whole link stays within 2,000 characters for any Tidigar origin and
@@ -3586,7 +4027,7 @@ const scope = { crypto: globalThis.crypto };
   }
 
   // A fragment from a link's data, with its checksum.
-  const sealed = (data) => `s=${VERSION}.${data}.${checksumOf(data)}`;
+  const sealed = (data, version = VERSION) => `s=${version}.${data}.${checksumOf(data)}`;
   // Whether a packed payload holds a local time: [day offset, minute].
   const hasClockValues = (payload) =>
     [
@@ -3956,6 +4397,36 @@ const scope = { crypto: globalThis.crypto };
             [null, null, null, null, 1, '', '', []],
           ),
         );
+      const indices = new Map(
+        [...activities, ...milestones, ...periods].map(({ id }, index) => [id, index]),
+      );
+      if (manifest.baseline) {
+        const { capturedAt, costCurrency, items } = manifest.baseline;
+        payload.b = [
+          capturedAt,
+          costCurrency ?? null,
+          items.map(({ id, type, start, end, estimatedCostMinor }) => [
+            indices.get(id) ?? id,
+            type ?? null,
+            start ?? null,
+            end ?? null,
+            estimatedCostMinor ?? null,
+          ]),
+        ];
+      }
+      const actuals = [...activities, ...milestones].flatMap((item, index) =>
+        ['actualStart', 'actualFinish', 'actualCostMinor'].some((key) => item[key] !== undefined)
+          ? [
+              [
+                index,
+                item.actualStart ?? null,
+                item.actualFinish ?? null,
+                item.actualCostMinor ?? null,
+              ],
+            ]
+          : [],
+      );
+      if (actuals.length) payload.x = actuals;
       if (project.sharedViews.length)
         payload.v = project.sharedViews.map((view) => ({ name: view.name, ...packView(view) }));
       if (initialView) {
@@ -4023,7 +4494,7 @@ const scope = { crypto: globalThis.crypto };
       const corrections = [];
       // A link with local times is read as it is; hand-written links hold dates.
       const clock = hasClockValues(input);
-      if (lenient && !clock) {
+      if (lenient && !clock && !hasTracking(input)) {
         const tidied = lenient.tidyPayload(input);
         payload = tidied.payload;
         corrections.push(...tidied.corrections);
@@ -4266,6 +4737,42 @@ const scope = { crypto: globalThis.crypto };
           own({ ...unpackView(packed), name: packed.name }, like?.sharedViews[index]),
         ),
       };
+      const entries = (value, size) => {
+        if (!Array.isArray(value) || value.length !== size)
+          fail('invalid', 'The share link has malformed tracking data.');
+        return value;
+      };
+      if (payload.b !== undefined) {
+        const [capturedAt, costCurrency, rows] = entries(payload.b, 3);
+        raw.manifest.baseline = {
+          capturedAt,
+          ...(costCurrency === null ? {} : { costCurrency }),
+          items: list(rows).map((entry) => {
+            const [target, type, start, end, estimatedCostMinor] = entries(entry, 5);
+            return {
+              id: typeof target === 'string' ? target : at(raw.items, target).id,
+              ...(type === null ? {} : { type }),
+              ...(start === null ? {} : { start }),
+              ...(end === null ? {} : { end }),
+              ...(estimatedCostMinor === null ? {} : { estimatedCostMinor }),
+            };
+          }),
+        };
+      }
+      const tracked = new Set();
+      for (const entry of list(payload.x)) {
+        const [target, actualStart, actualFinish, actualCostMinor] = entries(entry, 4);
+        if (
+          tracked.has(target) ||
+          [actualStart, actualFinish, actualCostMinor].every((value) => value === null)
+        )
+          fail('invalid', 'The share link has malformed actuals.');
+        const item = at(raw.items, target);
+        tracked.add(target);
+        if (actualStart !== null) item.actualStart = actualStart;
+        if (actualFinish !== null) item.actualFinish = actualFinish;
+        if (actualCostMinor !== null) item.actualCostMinor = actualCostMinor;
+      }
       let repairs = [];
       const project = inPositions(raw, () => {
         try {
@@ -4329,6 +4836,10 @@ const scope = { crypto: globalThis.crypto };
           ...project.items.filter((item) => item.type).map((item) => item.id),
         ]);
         project.items = project.items.filter((item) => kept.has(item.id));
+        if (project.manifest.baseline)
+          project.manifest.baseline.items = project.manifest.baseline.items.filter((row) =>
+            kept.has(row.id),
+          );
         for (const record of project.items) {
           if (!record.dependsOn) continue;
           record.dependsOn = record.dependsOn.filter((id) => kept.has(id));
@@ -4457,6 +4968,9 @@ const scope = { crypto: globalThis.crypto };
       if (view.listSort && !LIST_KEYS.has(view.listSort) && !known.has(view.listSort))
         view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
+      delete project.manifest.baseline;
+      for (const item of project.items)
+        for (const key of ['actualStart', 'actualFinish', 'actualCostMinor']) delete item[key];
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
         for (const record of project.items) delete record.ref;
@@ -4490,7 +5004,7 @@ const scope = { crypto: globalThis.crypto };
         Infinity,
       );
       const data = toBase64Url(bytes);
-      const fragment = sealed(data);
+      const fragment = sealed(data, hasTracking(payload) ? TRACKING_VERSION : VERSION);
       if (fragment.length > MAX_FRAGMENT_LENGTH)
         fail('too-large', 'The roadmap is too large for a share link.', {
           length: fragment.length,
@@ -4513,7 +5027,8 @@ const scope = { crypto: globalThis.crypto };
         }
       const match = /^s=(\d+)\.(.*)$/s.exec(text);
       if (!match) fail('not-share-link', 'This is not a share link.');
-      if (match[1] !== String(VERSION))
+      const version = Number(match[1]);
+      if (![VERSION, TRACKING_VERSION].map(String).includes(match[1]))
         fail('unsupported-version', 'This share link needs a newer version of Tidigar.');
       const limit = lenient ? LENIENT_FRAGMENT_LENGTH : MAX_FRAGMENT_LENGTH;
       if (text.length > limit)
@@ -4541,7 +5056,7 @@ const scope = { crypto: globalThis.crypto };
             ? 'The share link is damaged: its data holds characters outside base64url.'
             : 'The share link is damaged.',
         );
-      if (checksum === checksumOf(data)) return { data, corrections };
+      if (checksum === checksumOf(data)) return { data, corrections, version };
       if (!lenient)
         fail('corrupt', 'The share link is damaged: its data does not match its checksum.');
       // A checksum that is missing or itself damaged cannot vouch for the data.
@@ -4551,12 +5066,12 @@ const scope = { crypto: globalThis.crypto };
             ? `link: the checksum ${JSON.stringify(checksum)} is damaged; the data could not be checked`
             : 'link: the link has no checksum, so damage on the way could not be detected',
         );
-        return { data, corrections };
+        return { data, corrections, version };
       }
       const restored = restorations(data, checksum);
       if (restored.length === 1) {
         corrections.push(`link: the link was damaged on the way; ${restored[0].edit}`);
-        return { data: restored[0].data, corrections };
+        return { data: restored[0].data, corrections, version };
       }
       fail(
         'corrupt',
@@ -4587,13 +5102,15 @@ const scope = { crypto: globalThis.crypto };
       if (!/^\s*\{/.test(text)) fail('corrupt', 'The share link is damaged.');
       return text;
     }
-    function readPayload(text, corrections, options) {
+    function readPayload(text, corrections, options, version) {
       let payload;
       try {
         payload = JSON.parse(text);
       } catch (error) {
         fail('invalid', `The share link holds no valid JSON. ${error.message}`);
       }
+      if (hasTracking(payload) !== (version === TRACKING_VERSION))
+        fail('invalid', 'The share link version does not match its tracking data.');
       let result;
       try {
         result = unpack(payload, options);
@@ -4660,7 +5177,7 @@ const scope = { crypto: globalThis.crypto };
 
     async function decode(fragment, options) {
       if (lenient && readable?.isReadable(fragment)) return readReadable(fragment, options);
-      const { data, corrections } = readFragment(fragment);
+      const { data, corrections, version } = readFragment(fragment);
       const bytes = base64UrlBytes(data);
       for (const [input, note] of readings(bytes)) {
         let text;
@@ -4677,7 +5194,12 @@ const scope = { crypto: globalThis.crypto };
           if (error instanceof ShareLinkError && error.code !== 'corrupt') throw error;
           continue;
         }
-        return readPayload(text, note ? [...corrections, `link: ${note}`] : corrections, options);
+        return readPayload(
+          text,
+          note ? [...corrections, `link: ${note}`] : corrections,
+          options,
+          version,
+        );
       }
       fail('corrupt', 'The share link is damaged.');
     }
@@ -4688,7 +5210,7 @@ const scope = { crypto: globalThis.crypto };
      */
     function decodeSync(fragment, options) {
       if (lenient && readable?.isReadable(fragment)) return readReadable(fragment, options);
-      const { data, corrections } = readFragment(fragment);
+      const { data, corrections, version } = readFragment(fragment);
       const bytes = base64UrlBytes(data);
       for (const [input, note] of readings(bytes)) {
         let text;
@@ -4698,7 +5220,12 @@ const scope = { crypto: globalThis.crypto };
           if (error instanceof ShareLinkError && error.code !== 'corrupt') throw error;
           continue;
         }
-        return readPayload(text, note ? [...corrections, `link: ${note}`] : corrections, options);
+        return readPayload(
+          text,
+          note ? [...corrections, `link: ${note}`] : corrections,
+          options,
+          version,
+        );
       }
       fail('corrupt', 'The share link is damaged.');
     }
@@ -5216,6 +5743,10 @@ const scope = { crypto: globalThis.crypto };
   /** Read a share-link payload back into a plan. Saved views (`v`) and view
       settings the plan has no field for are not carried; `lost` names them. */
   function fromPayload(payload) {
+    if (payload.b !== undefined || payload.x !== undefined)
+      throw new PlanError(
+        'Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.',
+      );
     const base = dayNumber(`${String(payload.y).padStart(4, '0')}-01-01`);
     const day = (offset) => isoDate(base + offset);
     const dimensions = (payload.m || []).map(([name, options]) => ({ name, options }));

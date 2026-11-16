@@ -1,17 +1,12 @@
 # Tidigar share link specification
 
-See [sharing a roadmap as a link](https://tidigar.com/guides/sharing),
-with the Share link dialog and the steps to copy a link.
+See [sharing a roadmap as a link](https://tidigar.com/guides/sharing) for the Share link dialog.
 
-Status: public pre-release specification, version 1. It defines how any tool,
-script or AI agent writes a link that opens a complete, editable Tidigar
-roadmap. The link carries the whole roadmap itself, so nothing is uploaded,
-nothing is stored on a server and no account is needed. A link is plain text,
-written one record at a time; it needs no code, compression or encoding.
+Public pre-release specification, versions 1 and 2. A readable link carries
+an editable roadmap as plain text records and opens without an account.
 
-License: published by Hamacher Software AB under
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Anyone may
-implement the format it describes, in any software, without asking.
+Hamacher Software AB publishes this specification under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 The keywords **MUST**, **MUST NOT**, **SHOULD** and **MAY** are normative.
 The roadmap model, its field rules and limits are defined in the
@@ -23,18 +18,14 @@ The roadmap model, its field rules and limits are defined in the
 https://open.tidigar.com/s#t=1~<record>~<record>~…~!
 ```
 
-It opens the Tidigar web app with the roadmap, or the Tidigar app when it is
-installed and claims the link. The opener is not deployed yet; until it is,
-`https://app.tidigar.com/#t=1~…` opens the same roadmap in the web app.
+Links open in the web app or in an installed Tidigar app that claims the link.
+Until the opener is deployed, use `https://app.tidigar.com/#t=1~…` for the web app.
 
-- The fragment starts with `t=1`. Records follow, each after a `~`, as
+- The fragment starts with `t=1` or `t=2`. Records follow, each after a `~`, as
   `key=value` or a one-letter flag, in any order. `!` ends the link.
 - The whole link SHOULD stay within **2,000 characters**: the fragment within
-  **1,900**. A larger roadmap is shared as a project file. Links are meant to
-  be small, useful starting plans that fit in a chat message, an email or a QR
-  code.
-- The fragment is never sent to a server by browsers, so the roadmap stays
-  between the sender and the recipient.
+  **1,900**. Share larger roadmaps as project files.
+- Browsers keep the fragment on the device when requesting the page.
 
 ## Records
 
@@ -63,14 +54,10 @@ and `c=` MUST give the counts, so a missing record or a cut link is noticed.
 a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
 ```
 
-- **Title**, then **start**: `MM-DD` in year `y`, or `YYYY-MM-DD` for another
-  year. Short dates always use `y`; they do not roll into the next year
-  when the month decreases. A plan may cross several year boundaries:
-  with `y=2026`, use `12-29`, `2027-12-30` and `2028-01-10` for starts
-  in those three years. Then **days**: how many days it lasts, `1` for a
-  single day. In a roadmap planned in work days these are work days, skipping weekends and
-  periods. Use `-/-` in place of start and days for an undated
-  activity, as in `a1=Request_quotes/-/-`.
+- **Title**, then **start** (`MM-DD` always uses `y`; `YYYY-MM-DD` can use
+  any year), then **days** (`1` for a single day). Work-day plans skip
+  weekends and periods. For undated work use `-/-` for start and days,
+  as in `a1=Request_quotes/-/-`.
 - Then, in any order:
   - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
     order. When a name belongs to several dimensions, its position selects
@@ -114,11 +101,9 @@ p1=Autumn_break/10-26/5
 - `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names
   and dates as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
   Board grouping uses `rows:` and `columns:`.
-- Words set how a timeline looks: `classic` shows one activity per row under
-  a fixed label column with reference keys, as in MS Project, and opens the
-  roadmap in its Classic view; `compact` lets activities share rows; `minimal`,
-  `airy`, `contrast` and `terminal` choose a style. A word alone means a
-  timeline: `v=classic`.
+- Timeline layout is `classic` (one activity per row, fixed labels and reference
+  keys) or `compact` (shared rows). Styles are `minimal`, `airy`, `contrast`
+  and `terminal`. A layout or style alone selects the timeline, as in `v=classic`.
 
 Use `progress` for rows or columns and `@progress` or `@follow-up-status`
 for color. Links omit assignee settings.
@@ -137,70 +122,75 @@ for color. Links omit assignee settings.
 - Titles are up to 180 characters, names up to 100, the roadmap's description
   up to 500.
 
+## Tracking records
+
+Use `t=2` for a readable link with baseline or actuals. Its other
+records follow the same grammar as version 1. Tracking fields are
+separated with `/` and write missing values as `-`.
+
+- `b=<UTC capture timestamp>/<currency or ->` starts a baseline. It may
+  have no rows.
+- `b1=<work key or historical UUID>/<activity or milestone>/<start>/<end>/<budget>`
+  records one baseline row. Repeat as `b2`, `b3` and so on. The removed
+  work's UUID stands in for a work key. Milestones put their planned
+  moment in start and leave the end and budget absent.
+- `x1=<work key>/<actual start>/<actual finish>/<actual cost>` records
+  actuals for live work. A milestone has only actual finish. List each
+  work key at most once.
+
+Use full dates `YYYY-MM-DD` or local minutes `YYYY-MM-DDTHH:mm` for
+tracking values, minor units for budgets and actual costs, and whole
+seconds in the UTC timestamp. Zero survives a copy. Compact copy links
+with tracking use `s=2`; other compact links use `s=1`. Full copies
+include historical baseline rows and give live records new IDs. A copy
+limited to visible activities keeps baseline rows only for the records
+included in that copy. Published screen views omit baseline and actuals.
+
 ## Example
 
 ```text
 https://open.tidigar.com/s#t=1~n=Heat_pump_replacement~y=2026~w~m1=Team:Household,Installer~m2=Phase:Plan,Install~a1=Review_current_system/10-12/3/Household,Plan~a2=Request_quotes/10-15/6/Household,Plan/@a1~a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2~s1=Heat_pump_in_operation/11-09/@a3~s2=Contract_signed/10-30/fixed~p1=Autumn_break/10-26/5~v=timeline/color:Team/group:Phase~c=3.2.1~!
 ```
 
-A heat pump replacement planned in work days: three activities by Team and
-Phase, the installation waiting both for the quotes and for the signed
-contract, a completion milestone, and the autumn break as a vacation week. It
-opens as a timeline grouped by Phase and colored by Team.
+Installation waits for quotes and the signed contract. The work-day timeline
+groups by Phase and colors by Team.
 
 ## Opening a link
 
-Tidigar adds the opened roadmap to the recipient's own library and shows it
-in the link's view. Every record gets a new identity, so each opening is an
-independent copy: editing it never changes the link or anyone else's copy.
-Opening the same link again on a device selects the copy it made.
+Tidigar copies the roadmap into the recipient's library with new record IDs.
+Reopening the same link on a device selects that copy.
 
-The copy is made as a new roadmap is: its activities and milestones get
-reference keys in the link's order, such as `WL-1`, `WL-2`, under the prefix
-`r=` gives or one made from the roadmap's name. Its first saved view is
-Classic, framed from the earliest activity or milestone to the latest end
-or milestone, with three days of margin on each side. Later periods remain
-visible. Without `v=`, the plan opens in Classic; an explicit `v=` is
-respected.
+Activities and milestones get reference keys in link order (`WL-1`, `WL-2`),
+using `r=` or a prefix derived from the plan name. The first saved view is
+Classic, framed by the earliest and latest activity or milestone dates with
+three days of margin on each side. Later periods remain visible. The plan
+opens in `v=` when present and Classic by default.
 
-Tidigar reads a link leniently and says what it did. What has an obvious fix
-is fixed and reported by record, for example `a3: no dimension has the
-option "Done"; it was left empty`, or an activity that starts before what it
-depends on is moved later. A link with a problem that has no fix, such as
-`a1: start "02-30" is not a date`, is refused with every problem listed.
-Tidigar shows the report so it can be passed back to whoever wrote the link.
-Tidigar never drops an activity, a milestone or a period.
+Tidigar reports repairs by record, such as clearing an unknown option or
+moving an activity after its dependency. For irremediable input such as
+`a1: start "02-30" is not a date`, Tidigar refuses the link and lists every
+problem. Repairs preserve all activities, milestones and periods.
 
-Tidigar shares links of its own in a compressed form, `#s=1.…`. They are not
-meant to be read or written by hand; open them in Tidigar.
+Open Tidigar's compressed links (`#s=1.…` or `#s=2.…`) in the app.
 
 ## Optional validation
 
-Agents can write links directly using [llms.txt](https://tidigar.com/llms.txt),
-without tools or code. To check a finished link locally, optionally run:
+To check a finished link locally:
 
 ```sh
 node tidigar-link.mjs --validate "<finished URL>"
 ```
 
-The module below reports the plan's dates and dependencies, record counts,
-fragment length and any corrections Tidigar would make. It exits 0 only when
-the link opens without corrections. Invalid input, a fragment over 1,900
-characters or corrections to review produce exit 1. It does not rewrite the
-link or save anything; fix the original records and validate again if desired.
+The module reports dates, dependencies, counts, fragment length and corrections.
+It leaves the link unchanged. Exit 0 means it opens without corrections. Exit 1
+means invalid input, corrections or a fragment over 1,900 characters.
 
 ## Building a link from JSON
 
-`https://tidigar.com/agents/v1/tidigar-link.mjs` (Node.js 20 or later, Deno or
-Bun) and `https://tidigar.com/agents/v1/tidigar_link.py` (Python 3.8 or
-later) build a link from a plan: the roadmap as JSON with real dates and
-names, described by `https://tidigar.com/agents/schema/plan-v1.json`. They
-validate it with Tidigar's own rules, print the link, a summary with real
-dates and the fragment length, or an error that names the broken rule and
-the record, such as `activities[2] "Build"`. `--read <link>` prints a link's
-roadmap as a plan to change and build again. They run locally and send
-nothing anywhere. As a module, `tidigar-link.mjs` exports `createLink(plan)`,
-`readLink(link)` and `embedCode(link, title)`.
+The [agent guide](https://tidigar.com/agents) links to the Plan JSON v1
+schema and local builders. The builders validate the plan and print the link,
+dated summary and fragment length, or name the invalid rule and record.
+`--read <link>` prints Plan JSON from a `t=1` link. The module exports
+`createLink(plan)`, `readLink(link)` and `embedCode(link, title)`.
 
-Instructions for AI agents, with these builders and a worked example, are at
-[tidigar.com/llms.txt](https://tidigar.com/llms.txt).
+See [llms.txt](https://tidigar.com/llms.txt) for direct authoring and worked examples.

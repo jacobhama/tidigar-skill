@@ -385,6 +385,8 @@ def size(text):
 
 def link(payload):
     """The readable link of a checked payload: t=1~...~!"""
+    if "b" in payload or "x" in payload:
+        raise ValueError("Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.")
     year = payload["y"]
     base = datetime.date(year, 1, 1).toordinal()
     dims, rows, marks, bands = payload.get("m", []), payload.get("i", []), payload.get("s", []), payload.get("p", [])
@@ -482,6 +484,8 @@ def payload_of(url):
     """A readable link's payload. Raises an error naming every record that cannot be read."""
     fragment = url.split("#", 1)[-1].split("&", 1)[0]
     records = fragment.split("~")
+    if records[0] == "t=2":
+        raise ValueError("Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.")
     if records[0] != "t=1":
         raise ValueError("Give a readable Tidigar link, #t=1~...")
     problems = []
@@ -746,7 +750,10 @@ def summary(payload):
 if __name__ == "__main__" and "ipykernel" not in sys.modules:
     args = sys.argv[1:]
     if args[:1] == ["--read"]:
-        print(json.dumps(read(args[1]), ensure_ascii=False, indent=2))
+        try:
+            print(json.dumps(read(args[1]), ensure_ascii=False, indent=2))
+        except ValueError as error:
+            sys.exit(str(error))
     else:
         source = sys.stdin if args[:1] in ([], ["-"]) else open(args[0], encoding="utf-8")
         plan = json.load(source)
