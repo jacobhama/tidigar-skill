@@ -142,15 +142,11 @@ Use full dates `YYYY-MM-DD` or local minutes `YYYY-MM-DDTHH:mm` for
 tracking values, minor units for budgets and actual costs, and whole
 seconds in the UTC timestamp. Zero survives a copy. Compact copy links
 with tracking use `s=2`; other compact links use `s=1`. Full copies
-include historical baseline rows and give live records new IDs. **Leave out
-baseline and actuals** makes an `s=1` copy and drops the tracking view settings.
-A copy
-limited to visible activities keeps baseline rows only for the records
-included in that copy. In a readable Timeline view with a baseline, add
-`baseline` to its settings (for example, `v=timeline/baseline`) to show the
-overlay on opening. Compact copy links keep the setting in their view
-configuration. Published screens omit the overlay, baseline, actuals and
-tracking columns.
+include historical baseline rows and give live records new IDs. The default copy omits tracking and uses `s=1`. To include tracking, turn
+off **Leave out baseline and actuals**. A visible-only copy limits baseline
+rows to copied records. Readable Timeline settings `baseline` and `actuals`
+show the respective layers. Compact links keep both settings. Published
+screens carry only tracking approved at publication and used by the view.
 
 ## Example
 

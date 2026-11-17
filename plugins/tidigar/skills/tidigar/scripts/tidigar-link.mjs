@@ -240,6 +240,55 @@ const scope = { crypto: globalThis.crypto };
   const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
   // A milestone is due at its moment, an activity at its end.
   const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
+  // Display intervals use the saved view and only the records it is showing.
+  // An actual with just one date represents a point, even on an activity.
+  function timelineTracking(project, view, records = project?.items ?? []) {
+    const baseline = new Map();
+    const actuals = new Map();
+    const placements = new Map();
+    const saved = view?.timelineShowBaseline
+      ? new Map((project?.manifest.baseline?.items ?? []).map((row) => [row.id, row]))
+      : new Map();
+    let first = Infinity;
+    let last = -Infinity;
+    let days = false;
+    let clock = false;
+    for (const item of records) {
+      const row = saved.get(item.id);
+      if (row?.start) baseline.set(item.id, row);
+      if (view?.timelineShowActuals && (item.actualStart || item.actualFinish))
+        actuals.set(item.id, {
+          start: item.actualStart || item.actualFinish,
+          ...(item.actualStart && item.actualFinish
+            ? { end: item.actualFinish }
+            : { type: 'milestone' }),
+        });
+      for (const mark of [baseline.get(item.id), actuals.get(item.id)]) {
+        if (!mark) continue;
+        const end = mark.end ?? mark.start;
+        const previous = placements.get(item.id);
+        placements.set(item.id, {
+          start:
+            previous && timeOf(previous.start) < timeOf(mark.start) ? previous.start : mark.start,
+          end: previous && timeAfter(previous.end) > timeAfter(end) ? previous.end : end,
+        });
+        first = Math.min(first, timeOf(mark.start));
+        last = Math.max(last, timeAfter(end));
+        days ||= !isClock(mark.start) || !isClock(end);
+        clock ||= isClock(mark.start) || isClock(end);
+      }
+    }
+    const room = days ? DAY : DAY / 24;
+    const range =
+      last >= first
+        ? {
+            start: Math.floor((first - room) / DAY) * DAY,
+            end: Math.ceil((last + room) / DAY) * DAY,
+            clock,
+          }
+        : null;
+    return { baseline, actuals, placements, range };
+  }
   const followUpClocks = new Map();
   const followUpBaselines = new WeakMap();
   function baselineFinish(project, id) {
@@ -1398,6 +1447,35 @@ const scope = { crypto: globalThis.crypto };
     ...SCHEDULE_TRACKING_COLUMNS,
     ...COST_TRACKING_COLUMNS,
   ]);
+  // A public List may keep the underlying values needed by visible variances.
+  const SCREEN_TRACKING_COLUMNS = Object.freeze({
+    baselineStart: ['baselineDates'],
+    currentStart: [],
+    actualStart: ['actualStart'],
+    currentStartVariance: ['baselineDates'],
+    actualStartVariance: ['baselineDates', 'actualStart'],
+    baselineFinish: ['baselineDates'],
+    currentFinish: [],
+    actualFinish: ['actualFinish'],
+    currentFinishVariance: ['baselineDates'],
+    actualFinishVariance: ['baselineDates', 'actualFinish'],
+    budgetMinor: ['baselineCost'],
+    currentEstimateMinor: [],
+    actualCostMinor: ['actualCostMinor'],
+    currentCostVarianceMinor: ['baselineCost'],
+    actualCostVarianceMinor: ['baselineCost', 'actualCostMinor'],
+  });
+  const screenTrackingFields = (view) =>
+    view?.view === 'timeline'
+      ? [
+          ...(view.timelineShowBaseline ? ['baselineDates'] : []),
+          ...(view.timelineShowActuals ? ['actualStart', 'actualFinish'] : []),
+        ]
+      : view?.view === 'list'
+        ? Array.from(
+            new Set((view.listColumns || []).flatMap((key) => SCREEN_TRACKING_COLUMNS[key] || [])),
+          )
+        : [];
   const LIST_COLUMN_KEYS = Object.freeze([
     'title',
     'duration',
@@ -1555,6 +1633,9 @@ const scope = { crypto: globalThis.crypto };
         ),
         ...(booleanValue(source.timelineShowBaseline, `${path}.timelineShowBaseline`, false)
           ? { timelineShowBaseline: true }
+          : {}),
+        ...(booleanValue(source.timelineShowActuals, `${path}.timelineShowActuals`, false)
+          ? { timelineShowActuals: true }
           : {}),
         textMode,
         filters: normalizeFilters(source.filters, context, `${path}.filters`),
@@ -2213,8 +2294,11 @@ const scope = { crypto: globalThis.crypto };
     followUpStatus,
     compareBaseline,
     scheduledFinish,
+    timelineTracking,
     listColumnKeys: LIST_COLUMN_KEYS,
     trackingListColumns: TRACKING_LIST_COLUMNS,
+    screenTrackingColumns: SCREEN_TRACKING_COLUMNS,
+    screenTrackingFields,
     scheduleTrackingColumns: SCHEDULE_TRACKING_COLUMNS,
     costTrackingColumns: COST_TRACKING_COLUMNS,
     startingAt,
@@ -3629,6 +3713,10 @@ const scope = { crypto: globalThis.crypto };
           view.timelineShowBaseline = true;
           continue;
         }
+        if (tracking && payload.x && plain === 'actuals') {
+          view.timelineShowActuals = true;
+          continue;
+        }
         if (LAYOUTS[plain]) {
           view.view ??= 'timeline';
           view.timelineActivityRows = LAYOUTS[plain];
@@ -3868,6 +3956,7 @@ const scope = { crypto: globalThis.crypto };
       );
       if (layout) settings.push(layout);
       if (payload.b && view.timelineShowBaseline) settings.push('baseline');
+      if (payload.x && view.timelineShowActuals) settings.push('actuals');
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
       for (const [axis, key] of Object.entries(VIEW_AXES)) {
         if (key === 'color' && view[key] === 'follow-up-status')
@@ -4875,6 +4964,7 @@ const scope = { crypto: globalThis.crypto };
       for (const view of views) {
         if (!view) continue;
         delete view.timelineShowBaseline;
+        delete view.timelineShowActuals;
         for (const key of COLUMN_FIELDS)
           if (Array.isArray(view[key]))
             view[key] = view[key].filter((column) => !trackingColumns.has(column));
@@ -4985,7 +5075,7 @@ const scope = { crypto: globalThis.crypto };
      * only where the view shows them. Filters and search are applied here,
      * so the snapshot's view carries neither.
      */
-    function screenSnapshot(projectInput, viewId, { locale } = {}) {
+    function screenSnapshot(projectInput, viewId, { locale, tracking = [] } = {}) {
       const source = model.normalizeProject(projectInput);
       const chosen = source.sharedViews.find((view) => view.id === viewId);
       if (!chosen) return null;
@@ -5009,11 +5099,50 @@ const scope = { crypto: globalThis.crypto };
           Object.entries(item.values).filter(([id]) => used.has(id)),
         );
       const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
-      stripTracking(project, [view]);
-      const publicColumn = (key) => listColumnKeys.has(key) || known.has(key);
+      const allowed = new Set(
+        model.screenTrackingFields(view).filter((key) => tracking.includes(key)),
+      );
+      const trackList = view.view === 'list' && allowed.size > 0 && project.manifest.baseline;
+      const columns = model.screenTrackingColumns;
+      const publicColumn = (key) =>
+        Object.hasOwn(columns, key)
+          ? trackList &&
+            view.listColumns.includes(key) &&
+            columns[key].every((field) => allowed.has(field))
+          : listColumnKeys.has(key) || known.has(key);
       for (const key of COLUMN_FIELDS) view[key] = view[key].filter(publicColumn);
       if (!publicColumn(view.listSort)) view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
+      if (!allowed.size) stripTracking(project, [view]);
+      else {
+        if (!allowed.has('baselineDates')) delete view.timelineShowBaseline;
+        if (!allowed.has('actualStart') || !allowed.has('actualFinish'))
+          delete view.timelineShowActuals;
+        const hiddenMilestones = new Set(
+          view.view === 'timeline' && view.timelineMilestoneMode === 'hide'
+            ? project.items.filter((item) => item.type === 'milestone').map((item) => item.id)
+            : [],
+        );
+        const snapshot = project.manifest.baseline;
+        if (snapshot) {
+          if (!allowed.has('baselineDates') && !allowed.has('baselineCost') && !trackList)
+            delete project.manifest.baseline;
+          else {
+            if (!allowed.has('baselineCost')) delete snapshot.costCurrency;
+            snapshot.items = snapshot.items.filter(({ id }) => !hiddenMilestones.has(id));
+            for (const row of snapshot.items) {
+              if (!allowed.has('baselineDates')) {
+                delete row.start;
+                delete row.end;
+              }
+              if (!allowed.has('baselineCost')) delete row.estimatedCostMinor;
+            }
+          }
+        }
+        for (const item of project.items)
+          for (const key of ['actualStart', 'actualFinish', 'actualCostMinor'])
+            if (!allowed.has(key) || hiddenMilestones.has(item.id)) delete item[key];
+      }
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
         for (const record of project.items) delete record.ref;
