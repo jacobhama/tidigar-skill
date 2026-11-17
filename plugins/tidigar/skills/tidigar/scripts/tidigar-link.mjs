@@ -1354,6 +1354,24 @@ const scope = { crypto: globalThis.crypto };
     return columns;
   }
 
+  const TRACKING_LIST_COLUMNS = Object.freeze([
+    'baselineFinish',
+    'currentFinish',
+    'actualFinish',
+    'actualFinishVariance',
+  ]);
+  const LIST_COLUMN_KEYS = Object.freeze([
+    'title',
+    'duration',
+    'start',
+    'end',
+    'dependsOn',
+    'description',
+    'progress',
+    'estimatedCostMinor',
+    ...TRACKING_LIST_COLUMNS,
+  ]);
+
   function normalizeViews(value, contextInput, registry = makeIdRegistry()) {
     const context = contextFrom(contextInput);
     const views = requireArray(value, 'sharedViews', MAX_VIEWS);
@@ -1362,17 +1380,7 @@ const scope = { crypto: globalThis.crypto };
     const year = Number.isInteger(context.year) ? context.year : new Date().getFullYear();
     const defaultStart = `${year}-01-01`;
     const defaultEnd = `${year}-12-31`;
-    const columnKeys = new Set([
-      'title',
-      'duration',
-      'start',
-      'end',
-      'dependsOn',
-      'description',
-      'progress',
-      'estimatedCostMinor',
-      ...dimensions,
-    ]);
+    const columnKeys = new Set([...LIST_COLUMN_KEYS, ...dimensions]);
     return views.map((view, index) => {
       const path = `sharedViews[${index}]`;
       const source = requireRecord(view, path);
@@ -2163,6 +2171,9 @@ const scope = { crypto: globalThis.crypto };
     timeAfter,
     followUpStatus,
     compareBaseline,
+    scheduledFinish,
+    listColumnKeys: LIST_COLUMN_KEYS,
+    trackingListColumns: TRACKING_LIST_COLUMNS,
     startingAt,
     valueAt,
     maxRefLength: MAX_REF_LENGTH,
@@ -3890,18 +3901,6 @@ const scope = { crypto: globalThis.crypto };
     'timelineSummarizeBy',
   ]);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
-  // List columns that are no dimension.
-  const LIST_KEYS = new Set([
-    'title',
-    'duration',
-    'start',
-    'end',
-    'dependsOn',
-    'description',
-    'progress',
-    'estimatedCostMinor',
-  ]);
-
   class ShareLinkError extends Error {
     constructor(code, message, details = {}) {
       super(message);
@@ -4250,6 +4249,7 @@ const scope = { crypto: globalThis.crypto };
      share-link tidy (`share-link-tidy.js`) that reads a hand-written link
      and reports each correction. Encoders stay strict. */
   function createFactory({ model, repairDates = null, lenient = null, readable = null }) {
+    const listColumnKeys = new Set(model.listColumnKeys);
     /* Pack a normalized project into plain JSON values without IDs. */
     const builtInColorOrAxis = (key, value) =>
       value === model.progressAxis || (key === 'color' && value === model.followUpColor);
@@ -4883,21 +4883,11 @@ const scope = { crypto: globalThis.crypto };
           for (const key of COLUMN_FIELDS)
             if (Array.isArray(record[key]))
               record[key] = record[key].filter(
-                (column) =>
-                  [
-                    'title',
-                    'duration',
-                    'start',
-                    'end',
-                    'dependsOn',
-                    'description',
-                    'progress',
-                    'estimatedCostMinor',
-                  ].includes(column) || dimensionIds.has(column),
+                (column) => listColumnKeys.has(column) || dimensionIds.has(column),
               );
           if (
             record.listSort &&
-            !LIST_KEYS.has(record.listSort) &&
+            !listColumnKeys.has(record.listSort) &&
             !dimensionIds.has(record.listSort)
           )
             record.listSort = '';
@@ -4952,20 +4942,8 @@ const scope = { crypto: globalThis.crypto };
         );
       const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
       for (const key of COLUMN_FIELDS)
-        view[key] = view[key].filter(
-          (column) =>
-            [
-              'title',
-              'duration',
-              'start',
-              'end',
-              'dependsOn',
-              'description',
-              'progress',
-              'estimatedCostMinor',
-            ].includes(column) || known.has(column),
-        );
-      if (view.listSort && !LIST_KEYS.has(view.listSort) && !known.has(view.listSort))
+        view[key] = view[key].filter((column) => listColumnKeys.has(column) || known.has(column));
+      if (view.listSort && !listColumnKeys.has(view.listSort) && !known.has(view.listSort))
         view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
       delete project.manifest.baseline;
