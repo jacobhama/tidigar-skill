@@ -4864,14 +4864,33 @@ const scope = { crypto: globalThis.crypto };
       };
     }
 
+    function stripTracking(project, views) {
+      delete project.manifest.baseline;
+      for (const item of project.items) {
+        delete item.actualStart;
+        delete item.actualFinish;
+        delete item.actualCostMinor;
+      }
+      const trackingColumns = new Set(model.trackingListColumns);
+      for (const view of views) {
+        if (!view) continue;
+        delete view.timelineShowBaseline;
+        for (const key of COLUMN_FIELDS)
+          if (Array.isArray(view[key]))
+            view[key] = view[key].filter((column) => !trackingColumns.has(column));
+        if (trackingColumns.has(view.listSort)) view.listSort = '';
+      }
+    }
+
     /**
      * A smaller copy of a project and its initial view for a link:
      * `visibleItemIds` keeps only those activities and the dependencies
      * between them, `withoutDescriptions` empties the roadmap's and the
      * activities' descriptions, `withoutSavedViews` drops the saved views,
      * and `withoutUnusedDimensions` drops dimensions and options no kept
-     * activity uses, clearing view settings that referred to them. The
-     * original is not changed.
+     * activity uses, clearing view settings that referred to them.
+     * `withoutTracking` drops baseline and actuals plus their view settings.
+     * The original is not changed.
      */
     function reduce(projectInput, initialView = null, options = {}) {
       const source = model.normalizeProject(projectInput);
@@ -4954,6 +4973,7 @@ const scope = { crypto: globalThis.crypto };
         project.sharedViews.forEach(prune);
         view = prune(view);
       }
+      if (options.withoutTracking) stripTracking(project, [...project.sharedViews, view]);
       return { project: model.normalizeProject(project), view };
     }
 
@@ -4989,16 +5009,11 @@ const scope = { crypto: globalThis.crypto };
           Object.entries(item.values).filter(([id]) => used.has(id)),
         );
       const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
-      const trackingColumns = new Set(model.trackingListColumns);
-      const publicColumn = (key) =>
-        !trackingColumns.has(key) && (listColumnKeys.has(key) || known.has(key));
+      stripTracking(project, [view]);
+      const publicColumn = (key) => listColumnKeys.has(key) || known.has(key);
       for (const key of COLUMN_FIELDS) view[key] = view[key].filter(publicColumn);
       if (!publicColumn(view.listSort)) view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
-      delete project.manifest.baseline;
-      delete view.timelineShowBaseline;
-      for (const item of project.items)
-        for (const key of ['actualStart', 'actualFinish', 'actualCostMinor']) delete item[key];
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
         for (const record of project.items) delete record.ref;

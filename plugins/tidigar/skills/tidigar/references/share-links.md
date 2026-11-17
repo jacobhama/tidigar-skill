@@ -142,7 +142,9 @@ Use full dates `YYYY-MM-DD` or local minutes `YYYY-MM-DDTHH:mm` for
 tracking values, minor units for budgets and actual costs, and whole
 seconds in the UTC timestamp. Zero survives a copy. Compact copy links
 with tracking use `s=2`; other compact links use `s=1`. Full copies
-include historical baseline rows and give live records new IDs. A copy
+include historical baseline rows and give live records new IDs. **Leave out
+baseline and actuals** makes an `s=1` copy and drops the tracking view settings.
+A copy
 limited to visible activities keeps baseline rows only for the records
 included in that copy. In a readable Timeline view with a baseline, add
 `baseline` to its settings (for example, `v=timeline/baseline`) to show the
