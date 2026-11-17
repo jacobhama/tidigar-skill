@@ -241,12 +241,12 @@ const scope = { crypto: globalThis.crypto };
   // A milestone is due at its moment, an activity at its end.
   const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
   // Display intervals use the saved view and only the records it is showing.
-  // An actual with just one date represents a point, even on an activity.
+  // Started work extends to the current local day or minute until a finish is recorded.
   function timelineTracking(
     project,
     view,
     records = project?.items ?? [],
-    { publishedScreen = false } = {},
+    { publishedScreen = false, now = Date.now() } = {},
   ) {
     // A screen can publish actuals without exposing its baseline.
     const showActuals =
@@ -264,13 +264,17 @@ const scope = { crypto: globalThis.crypto };
     for (const item of records) {
       const row = saved.get(item.id);
       if (row?.start) baseline.set(item.id, row);
-      if (showActuals && (item.actualStart || item.actualFinish))
-        actuals.set(item.id, {
-          start: item.actualStart || item.actualFinish,
-          ...(item.actualStart && item.actualFinish
-            ? { end: item.actualFinish }
-            : { type: 'milestone' }),
-        });
+      if (showActuals && (item.actualStart || item.actualFinish)) {
+        const mark = { start: item.actualStart || item.actualFinish };
+        if (item.actualStart && item.actualFinish) mark.end = item.actualFinish;
+        else if (item.actualStart) {
+          const minute = localFollowUpMinute(now, project?.manifest.timeZone),
+            today = isClock(item.actualStart) ? minute : minute.slice(0, 10);
+          mark.end = timeOf(today) < timeOf(item.actualStart) ? item.actualStart : today;
+          mark.ongoing = true;
+        } else mark.type = 'milestone';
+        actuals.set(item.id, mark);
+      }
       for (const mark of [baseline.get(item.id), actuals.get(item.id)]) {
         if (!mark) continue;
         const end = mark.end ?? mark.start;
