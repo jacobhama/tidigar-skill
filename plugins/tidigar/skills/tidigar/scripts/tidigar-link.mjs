@@ -317,6 +317,12 @@ const scope = { crypto: globalThis.crypto };
       return timeOf(actualFinish) >= timeAfter(reference) ? 'done-late' : 'done';
     }
     if (!due) return 'undated';
+    const localMinute = localFollowUpMinute(now, timeZone);
+    if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
+    return due.slice(0, 10) === localMinute.slice(0, 10) ? 'today' : 'upcoming';
+  }
+
+  function localFollowUpMinute(now, timeZone) {
     let clock = followUpClocks.get(timeZone);
     if (!clock) {
       clock = new Intl.DateTimeFormat('en-GB', {
@@ -333,11 +339,43 @@ const scope = { crypto: globalThis.crypto };
     const parts = Object.fromEntries(
       clock.formatToParts(now).map(({ type, value }) => [type, value]),
     );
-    const today = `${parts.year}-${parts.month}-${parts.day}`;
-    const localMinute = `${today}T${parts.hour}:${parts.minute}`;
-    if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
-    return due.slice(0, 10) === today ? 'today' : 'upcoming';
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
+
+  // Apply only on a progress edit. Explicit actuals and their ordering take precedence.
+  function recordProgressActuals(
+    project,
+    item,
+    previousProgress,
+    { now = Date.now(), timeZone = project.manifest.timeZone, explicit = {} } = {},
+  ) {
+    if (!project.manifest.baseline || item.type === 'period') return false;
+    const start =
+      !item.type &&
+      previousProgress === 0 &&
+      item.progress > 0 &&
+      item.actualStart === undefined &&
+      !Object.hasOwn(explicit, 'actualStart');
+    const finish =
+      previousProgress !== 100 &&
+      item.progress === 100 &&
+      item.actualFinish === undefined &&
+      !Object.hasOwn(explicit, 'actualFinish');
+    if (!start && !finish) return false;
+    const minute = localFollowUpMinute(now, timeZone);
+    const value = isClock(scheduledFinish(item)) ? minute : minute.slice(0, 10);
+    let recorded = false;
+    if (start && !(timeOf(value) >= timeAfter(item.actualFinish))) {
+      item.actualStart = value;
+      recorded = true;
+    }
+    if (finish && !(timeOf(item.actualStart) >= timeAfter(value))) {
+      item.actualFinish = value;
+      recorded = true;
+    }
+    return recorded;
+  }
+
   // Only two clock values imply a minute comparison. A day value carries
   // no time of day, so compare calendar dates when either side is a day.
   function scheduleVariance(baseline, value) {
@@ -2285,6 +2323,7 @@ const scope = { crypto: globalThis.crypto };
     startThreshold,
     completionBlockers,
     completionDecision,
+    recordProgressActuals,
     timeScale,
     isClock,
     holdsLocalTimes,

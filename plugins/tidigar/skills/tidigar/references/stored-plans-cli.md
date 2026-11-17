@@ -66,7 +66,9 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   Keep the project's `assignee` as read. It holds the organisation member number.
 - `tidigar plans save-baseline <plan-id> --revision <n> --captured-at <UTC-time> --view-id <UUID>`
   captures the baseline and Follow-up List together. Keep the same inputs for retries.
-  `tidigar activities actuals <plan-id> <activity-id> actuals.json --revision <n>` sets
+- `tidigar activities complete <plan-id> <activity-id> --revision <n>` marks
+  work complete and records actual dates in a tracked plan.
+- `tidigar activities actuals <plan-id> <activity-id> actuals.json --revision <n>` sets
   `actualStart`, `actualFinish` or `actualCostMinor` from JSON. Use null to clear.
 - **Comments:** tell the team what was done, decided or found on an activity, as the user:
   `tidigar comments add <plan-id> <activity-id> note.md` posts the file's Markdown, and
