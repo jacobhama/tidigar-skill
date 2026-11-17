@@ -391,14 +391,20 @@ const scope = { crypto: globalThis.crypto };
   }
 
   // Only two clock values imply a minute comparison. A day value carries
-  // no time of day, so compare calendar dates when either side is a day.
-  function scheduleVariance(baseline, value) {
+  // no time of day, so compare dates using the plan schedule when either side is a day.
+  function scheduleVariance(baseline, value, calendar) {
     const baselineTime = timeOf(baseline);
     const comparedTime = timeOf(value);
     if (!Number.isFinite(baselineTime) || !Number.isFinite(comparedTime)) return null;
     if (isClock(baseline) && isClock(value))
       return { unit: 'minutes', value: (comparedTime - baselineTime) / MINUTE };
-    return { unit: 'days', value: Math.floor(comparedTime / DAY) - Math.floor(baselineTime / DAY) };
+    const from = Math.floor(baselineTime / DAY) * DAY;
+    const to = Math.floor(comparedTime / DAY) * DAY;
+    if (!calendar) return { unit: 'days', value: (to - from) / DAY };
+    // Count (earlier, later], so reversing a comparison reverses its sign,
+    // even when an endpoint falls on a weekend or a non-working period.
+    const count = calendar.countWorkDays(Math.min(from, to) + DAY, Math.max(from, to));
+    return { unit: 'work-days', value: count === 0 ? 0 : Math.sign(to - from) * count };
   }
 
   const activityField = (item, field) =>
@@ -408,11 +414,11 @@ const scope = { crypto: globalThis.crypto };
     return validEstimatedCost(amount) ? amount : null;
   };
 
-  function trackingVariance(baseline, start, finish, cost) {
+  function trackingVariance(baseline, start, finish, cost, calendar) {
     const budget = trackingCost(baseline, 'estimatedCostMinor');
     return {
-      start: scheduleVariance(activityField(baseline, 'start'), start),
-      finish: scheduleVariance(scheduledFinish(baseline), finish),
+      start: scheduleVariance(activityField(baseline, 'start'), start, calendar),
+      finish: scheduleVariance(scheduledFinish(baseline), finish, calendar),
       costMinor: budget === null || cost === null ? null : cost - budget,
     };
   }
@@ -429,7 +435,11 @@ const scope = { crypto: globalThis.crypto };
   }
 
   /** Compare baseline and live records in the same plan currency by stable ID. */
-  function compareBaseline(baselineItems, currentItems) {
+  function compareBaseline(baselineItems, currentItems, project) {
+    const calendar =
+      project?.manifest?.schedule === 'work-days'
+        ? workCalendar(project.items.filter((item) => kindOf(item) === 'period'))
+        : null;
     const trackedById = (items) =>
       new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
     const baselineById = trackedById(baselineItems);
@@ -446,12 +456,14 @@ const scope = { crypto: globalThis.crypto };
         activityField(current, 'start'),
         scheduledFinish(current),
         currentCost,
+        calendar,
       );
       const vsActual = trackingVariance(
         baseline,
         activityField(current, 'actualStart'),
         current?.actualFinish,
         actualCost,
+        calendar,
       );
       rows.push({
         id,
