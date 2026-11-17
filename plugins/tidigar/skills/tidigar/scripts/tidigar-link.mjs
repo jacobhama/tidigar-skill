@@ -1532,6 +1532,9 @@ const scope = { crypto: globalThis.crypto };
           `${path}.timelineShowPeriodNames`,
           false,
         ),
+        ...(booleanValue(source.timelineShowBaseline, `${path}.timelineShowBaseline`, false)
+          ? { timelineShowBaseline: true }
+          : {}),
         textMode,
         filters: normalizeFilters(source.filters, context, `${path}.filters`),
         query:
@@ -3601,6 +3604,10 @@ const scope = { crypto: globalThis.crypto };
       else note('v', `${JSON.stringify(mode)} is not timeline, board, list or flow`);
       for (const setting of settings) {
         const plain = setting.trim().toLowerCase();
+        if (tracking && payload.b && plain === 'baseline') {
+          view.timelineShowBaseline = true;
+          continue;
+        }
         if (LAYOUTS[plain]) {
           view.view ??= 'timeline';
           view.timelineActivityRows = LAYOUTS[plain];
@@ -3839,6 +3846,7 @@ const scope = { crypto: globalThis.crypto };
         (word) => LAYOUTS[word] === view.timelineActivityRows,
       );
       if (layout) settings.push(layout);
+      if (payload.b && view.timelineShowBaseline) settings.push('baseline');
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
       for (const [axis, key] of Object.entries(VIEW_AXES)) {
         if (key === 'color' && view[key] === 'follow-up-status')
@@ -4967,6 +4975,7 @@ const scope = { crypto: globalThis.crypto };
       if (!publicColumn(view.listSort)) view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
       delete project.manifest.baseline;
+      delete view.timelineShowBaseline;
       for (const item of project.items)
         for (const key of ['actualStart', 'actualFinish', 'actualCostMinor']) delete item[key];
       if (!view.showRefs) {

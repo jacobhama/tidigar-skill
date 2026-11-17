@@ -144,7 +144,11 @@ seconds in the UTC timestamp. Zero survives a copy. Compact copy links
 with tracking use `s=2`; other compact links use `s=1`. Full copies
 include historical baseline rows and give live records new IDs. A copy
 limited to visible activities keeps baseline rows only for the records
-included in that copy. Published screen views omit baseline, actuals and tracking columns.
+included in that copy. In a readable Timeline view with a baseline, add
+`baseline` to its settings (for example, `v=timeline/baseline`) to show the
+overlay on opening. Compact copy links keep the setting in their view
+configuration. Published screens omit the overlay, baseline, actuals and
+tracking columns.
 
 ## Example
 
