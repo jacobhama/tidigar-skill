@@ -66,6 +66,10 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   Keep the project's `assignee` as read. It holds the organisation member number.
 - `tidigar plans save-baseline <plan-id> --revision <n> --captured-at <UTC-time> --view-id <UUID>`
   captures the baseline and Follow-up List together. Keep the same inputs for retries.
+- `tidigar plans replace-baseline <plan-id> --revision <n> --captured-at <UTC-time>`
+  replaces the snapshot with a new capture time.
+- `tidigar plans remove-baseline <plan-id> --revision <n>` clears the snapshot.
+  Both keep actuals and views. Keep the same inputs for retries.
 - `tidigar activities complete <plan-id> <activity-id> --revision <n>` marks
   work complete and records actual dates in a tracked plan.
 - `tidigar activities actuals <plan-id> <activity-id> actuals.json --revision <n>` sets
@@ -88,17 +92,11 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   prints its `url`; give it only to the user, never write it into a plan, a file or a public place.
   `tidigar screens delete <plan-id> <screen-id>` ends the link for good; confirm first. Exit 3 with
   `agent_screens_off`: the owners keep making screens and reading links to people.
-- **A plan's history as a story:** when the user gives you the versions of a schedule, such as
-  screenshots of the Gantt chart shown at each status meeting, store the latest version as the plan
-  and write a story that replays the versions on a screen. Read every version first and match
-  activities across them by meaning, not only by title. At `0:00`, set the plan to the first version
-  without animation: `hide` what came later, `update` dates, progress and earlier titles, `add` what
-  was dropped later, and `today("YYYY-MM-DD")` for the first meeting. Then give each later meeting
-  one moment four to six seconds apart: its `today`, its changes (`changeDates`, `update`, `show`,
-  `remove`) and a `caption` saying what changed and why if the slides say. End on the stored plan
-  and `loop()`. The pattern is under "A plan's history" in the story language. Creating or updating
-  the screen answers `storyWarnings`: each call a reader's screen would skip, by line. Fix them and
-  update the story until the list is empty, then give the user the screen's link.
+- **A plan's history as a story:** read all schedule versions and match activities by meaning.
+  Store the latest version. Follow "A plan's history" in the story language to replay earlier
+  versions on a screen, starting at `0:00` without animation. Give each later meeting its own
+  moment four to six seconds apart and caption its changes. End on the stored plan and `loop()`.
+  Fix every `storyWarnings` entry and update until the list is empty before returning the link.
 - Exit 7 (`write_unknown`): the write may or may not be saved. Get the plan and report what it
   holds; never repeat a write blindly.
 - Exit 2: ask the user to run `tidigar login`. Exit 3: read-only token, viewer or no subscription.

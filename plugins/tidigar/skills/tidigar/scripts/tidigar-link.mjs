@@ -242,7 +242,15 @@ const scope = { crypto: globalThis.crypto };
   const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
   // Display intervals use the saved view and only the records it is showing.
   // An actual with just one date represents a point, even on an activity.
-  function timelineTracking(project, view, records = project?.items ?? []) {
+  function timelineTracking(
+    project,
+    view,
+    records = project?.items ?? [],
+    { publishedScreen = false } = {},
+  ) {
+    // A screen can publish actuals without exposing its baseline.
+    const showActuals =
+      view?.timelineShowActuals && (project?.manifest.baseline || publishedScreen);
     const baseline = new Map();
     const actuals = new Map();
     const placements = new Map();
@@ -256,7 +264,7 @@ const scope = { crypto: globalThis.crypto };
     for (const item of records) {
       const row = saved.get(item.id);
       if (row?.start) baseline.set(item.id, row);
-      if (view?.timelineShowActuals && (item.actualStart || item.actualFinish))
+      if (showActuals && (item.actualStart || item.actualFinish))
         actuals.set(item.id, {
           start: item.actualStart || item.actualFinish,
           ...(item.actualStart && item.actualFinish
@@ -5139,7 +5147,9 @@ const scope = { crypto: globalThis.crypto };
         );
       const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
       const allowed = new Set(
-        model.screenTrackingFields(view).filter((key) => tracking.includes(key)),
+        project.manifest.baseline
+          ? model.screenTrackingFields(view).filter((key) => tracking.includes(key))
+          : [],
       );
       const trackList = view.view === 'list' && allowed.size > 0 && project.manifest.baseline;
       const columns = model.screenTrackingColumns;

@@ -153,7 +153,11 @@ with an editor's account ID or an empty assignee to clear it.
 
 Activity and assigned-work reads include follow-up status and available tracking.
 Use `tidigar_save_baseline` with the plan revision, UTC capture time in whole
-seconds and a new view UUID. Repeat those values if the reply is lost.
+seconds and a new view UUID. To change a saved baseline, use
+`tidigar_replace_baseline` with the revision and a new capture time, or
+`tidigar_remove_baseline` with the revision. Both keep actuals and views.
+Repeat the same inputs if the reply is lost. If the revision is stale, read
+the plan again.
 Use `tidigar_set_actuals` with the activity revision and changed actual fields
 (`null` clears). A milestone uses `actualFinish` for occurrence.
 
@@ -175,15 +179,10 @@ it shows. Deleting the view ends the screen. Give a screen link only to the
 user, never put it in a project, file or public place. `agent_screens_off`
 means the owners reserve making screens and retrieving links for people.
 
-For stories, read the [story language](https://tidigar.com/agents/docs/stories.md)
-and use the plan's titles and dates. To replay schedule versions from status
-meetings, read all versions first and match activities by meaning. Keep the
-latest version as the stored plan. At `0:00`, set its first version without
-animation with `hide`, `update`, `add` and `today`. Give each later meeting a
-moment four to six seconds apart with its changes and a caption explaining
-what changed. End on the stored version and `loop()`. The plan-history pattern
-is in the story reference. Fix every returned `storyWarnings` entry and update
-the screen until none remain before returning its link.
+To replay schedule versions, match activities by meaning and store the latest
+version. Follow "A plan's history" in the
+[story language](https://tidigar.com/agents/docs/stories.md). Fix every
+`storyWarnings` entry before returning the screen link.
 
 ## Remote MCP arguments
 
@@ -214,6 +213,8 @@ schemas supplied by the server define field types and limits.
 | `tidigar_list_activities` | `id?`, `all?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?` |
 | `tidigar_get_activity` | `id`, `activity` |
 | `tidigar_save_baseline` | `id`, `revision`, `capturedAt`, `viewId` |
+| `tidigar_replace_baseline` | `id`, `revision`, `capturedAt` |
+| `tidigar_remove_baseline` | `id`, `revision` |
 | `tidigar_set_actuals` | `id`, `activity`, `revision`, `fields` |
 | `tidigar_add_activity` | `id`, `fields`, `prefix?` |
 | `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |
