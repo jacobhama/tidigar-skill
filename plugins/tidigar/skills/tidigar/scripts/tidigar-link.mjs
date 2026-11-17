@@ -311,7 +311,7 @@ const scope = { crypto: globalThis.crypto };
     return followUpBaselines.get(rows).get(id);
   }
 
-  /** With a project, compare a recorded finish against its saved due date. */
+  /** Compare open due dates and recorded finishes against the saved due date. */
   function followUpStatus(
     item,
     {
@@ -331,6 +331,8 @@ const scope = { crypto: globalThis.crypto };
     if (!due) return 'undated';
     const localMinute = localFollowUpMinute(now, timeZone);
     if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
+    const reference = baselineDue ?? baselineFinish(project, item.id);
+    if (reference && timeOf(due) >= timeAfter(reference)) return 'behind-baseline';
     return due.slice(0, 10) === localMinute.slice(0, 10) ? 'today' : 'upcoming';
   }
 
