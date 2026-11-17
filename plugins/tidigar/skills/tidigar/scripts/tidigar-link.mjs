@@ -1354,11 +1354,28 @@ const scope = { crypto: globalThis.crypto };
     return columns;
   }
 
-  const TRACKING_LIST_COLUMNS = Object.freeze([
+  const SCHEDULE_TRACKING_COLUMNS = Object.freeze([
+    'baselineStart',
+    'currentStart',
+    'actualStart',
+    'currentStartVariance',
+    'actualStartVariance',
     'baselineFinish',
     'currentFinish',
     'actualFinish',
+    'currentFinishVariance',
     'actualFinishVariance',
+  ]);
+  const COST_TRACKING_COLUMNS = Object.freeze([
+    'budgetMinor',
+    'currentEstimateMinor',
+    'actualCostMinor',
+    'currentCostVarianceMinor',
+    'actualCostVarianceMinor',
+  ]);
+  const TRACKING_LIST_COLUMNS = Object.freeze([
+    ...SCHEDULE_TRACKING_COLUMNS,
+    ...COST_TRACKING_COLUMNS,
   ]);
   const LIST_COLUMN_KEYS = Object.freeze([
     'title',
@@ -2174,6 +2191,8 @@ const scope = { crypto: globalThis.crypto };
     scheduledFinish,
     listColumnKeys: LIST_COLUMN_KEYS,
     trackingListColumns: TRACKING_LIST_COLUMNS,
+    scheduleTrackingColumns: SCHEDULE_TRACKING_COLUMNS,
+    costTrackingColumns: COST_TRACKING_COLUMNS,
     startingAt,
     valueAt,
     maxRefLength: MAX_REF_LENGTH,
@@ -4941,10 +4960,11 @@ const scope = { crypto: globalThis.crypto };
           Object.entries(item.values).filter(([id]) => used.has(id)),
         );
       const known = new Set(project.manifest.dimensions.map((dimension) => dimension.id));
-      for (const key of COLUMN_FIELDS)
-        view[key] = view[key].filter((column) => listColumnKeys.has(column) || known.has(column));
-      if (view.listSort && !listColumnKeys.has(view.listSort) && !known.has(view.listSort))
-        view.listSort = '';
+      const trackingColumns = new Set(model.trackingListColumns);
+      const publicColumn = (key) =>
+        !trackingColumns.has(key) && (listColumnKeys.has(key) || known.has(key));
+      for (const key of COLUMN_FIELDS) view[key] = view[key].filter(publicColumn);
+      if (!publicColumn(view.listSort)) view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
       delete project.manifest.baseline;
       for (const item of project.items)

@@ -144,7 +144,7 @@ seconds in the UTC timestamp. Zero survives a copy. Compact copy links
 with tracking use `s=2`; other compact links use `s=1`. Full copies
 include historical baseline rows and give live records new IDs. A copy
 limited to visible activities keeps baseline rows only for the records
-included in that copy. Published screen views omit baseline and actuals.
+included in that copy. Published screen views omit baseline, actuals and tracking columns.
 
 ## Example
 
