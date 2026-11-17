@@ -126,16 +126,13 @@ save. Offer a separate copy only if the user wants one.
 
 ## Activities as tickets
 
-The [Agent work template](https://tidigar.com/examples/agent-work) includes a
-Board by progress and a List with undated backlog work. Shared assignments and
-comments require Tidigar Business or Server.
+For Business and Server, the [Agent work template](https://tidigar.com/examples/agent-work)
+includes a progress Board and backlog List.
 
-1. Resume assigned work with `tidigar_list_my_activities`. Find a known ticket
-   with `tidigar_list_activities` and its plan ID and `ref`. For unassigned
-   backlog use `assignee: ""`, `dated: false` and `progress: 0`. Use `all: true`
-   for a cross-plan search. Read the ticket with `tidigar_get_activity`.
-   If a reference is ambiguous, use the activity ID. Milestones
-   have `type: "milestone"`.
+1. Resume with `tidigar_list_my_activities`. Search with `tidigar_list_activities`
+   by plan and `ref` or across readable plans with `all: true`. For unassigned
+   backlog use `assignee: ""`, `dated: false` and `progress: 0`.
+   Open with `tidigar_get_activity`. Use the ID for ambiguous references. A milestone has `type: "milestone"`.
 2. Claim with `tidigar_claim_activity`. On `activity_claimed`, report who
    holds it. Set `takeOver: true` only at the user's request.
 3. Use `tidigar_update_activity` with the revision read and changed fields.
@@ -152,13 +149,20 @@ in `fields.description`. Read the same source back with `tidigar_get_activity`.
 An optional prefix selects its reference area. Use `tidigar_assign_activity`
 with an editor's account ID or an empty assignee to clear it.
 
+## Baseline and actuals
+
+Activity and assigned-work reads include follow-up status and available tracking.
+Use `tidigar_save_baseline` with the plan revision, UTC capture time in whole
+seconds and a new view UUID. Repeat those values if the reply is lost.
+Use `tidigar_set_actuals` with the activity revision and changed actual fields
+(`null` clears). A milestone uses `actualFinish` for occurrence.
+
 ## Comments
 
-Post as the user with `tidigar_add_comment`. Use the plan `id`, the activity
-ID and a Markdown `body`. Read threads newest first with `tidigar_list_comments`.
-Pass `next` as `before` for older comments. Deleted comments have a null
-`body`. Agents never edit or delete comments. If adding returns
-`write_unknown`, read the thread before retrying.
+Post a Markdown `body` as the user with `tidigar_add_comment`. Read newest first
+with `tidigar_list_comments` and pass `next` as `before` for older comments.
+Deleted comments have a null `body`. Agents never edit or delete comments.
+On `write_unknown`, read before retrying.
 
 ## Screens and stories
 
@@ -209,6 +213,8 @@ schemas supplied by the server define field types and limits.
 | `tidigar_list_my_activities` | none |
 | `tidigar_list_activities` | `id?`, `all?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?` |
 | `tidigar_get_activity` | `id`, `activity` |
+| `tidigar_save_baseline` | `id`, `revision`, `capturedAt`, `viewId` |
+| `tidigar_set_actuals` | `id`, `activity`, `revision`, `fields` |
 | `tidigar_add_activity` | `id`, `fields`, `prefix?` |
 | `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |
 | `tidigar_assign_activity` | `id`, `activity`, `assignee` |

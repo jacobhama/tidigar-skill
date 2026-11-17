@@ -61,10 +61,13 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   `tidigar plans delete <plan-id> --revision <n>` moves it to the trash, where it stays 30 days.
   Exit 5 with `stale_revision`: someone changed it since; get it again and ask again.
   `tidigar plans trash` lists deleted plans and `tidigar plans restore <plan-id>` brings one back.
-- **Assigned work:** run `tidigar activities mine` to find open tickets assigned
-  to the token member across readable plans in their organisation. Use the plan
-  ID and activity ID from the result to inspect an individual ticket. In a project, an item's
-  `assignee` is the organisation's member number for a person, not an account: keep it as read.
+- Run `tidigar activities mine`, `tidigar activities list <plan-id>` or
+  `tidigar activities get <plan-id> <activity-id>` for follow-up and tracking.
+  Keep the project's `assignee` as read. It holds the organisation member number.
+- `tidigar plans save-baseline <plan-id> --revision <n> --captured-at <UTC-time> --view-id <UUID>`
+  captures the baseline and Follow-up List together. Keep the same inputs for retries.
+  `tidigar activities actuals <plan-id> <activity-id> actuals.json --revision <n>` sets
+  `actualStart`, `actualFinish` or `actualCostMinor` from JSON. Use null to clear.
 - **Comments:** tell the team what was done, decided or found on an activity, as the user:
   `tidigar comments add <plan-id> <activity-id> note.md` posts the file's Markdown, and
   `tidigar comments list <plan-id> <activity-id>` reads the thread newest first (`--before <id>`
