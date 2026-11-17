@@ -241,11 +241,32 @@ const scope = { crypto: globalThis.crypto };
   // A milestone is due at its moment, an activity at its end.
   const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
   const followUpClocks = new Map();
-  /** Derived from the plan's wall clock and, when supplied, a recorded finish. */
-  function followUpStatus(item, { now = Date.now(), timeZone, actualFinish, baselineDue } = {}) {
+  const followUpBaselines = new WeakMap();
+  function baselineFinish(project, id) {
+    const rows = project?.manifest?.baseline?.items;
+    if (!rows) return undefined;
+    if (!followUpBaselines.has(rows))
+      followUpBaselines.set(rows, new Map(rows.map((row) => [row.id, scheduledFinish(row)])));
+    return followUpBaselines.get(rows).get(id);
+  }
+
+  /** With a project, compare a recorded finish against its saved due date. */
+  function followUpStatus(
+    item,
+    {
+      project,
+      now = Date.now(),
+      timeZone = project?.manifest?.timeZone,
+      actualFinish = project ? item.actualFinish : undefined,
+      baselineDue,
+    } = {},
+  ) {
     const due = scheduledFinish(item);
-    if (Number(item.progress) === 100)
-      return timeOf(actualFinish) >= timeAfter(baselineDue ?? due) ? 'done-late' : 'done';
+    if (Number(item.progress) === 100) {
+      if (!actualFinish) return 'done';
+      const reference = baselineDue ?? baselineFinish(project, item.id) ?? due;
+      return timeOf(actualFinish) >= timeAfter(reference) ? 'done-late' : 'done';
+    }
     if (!due) return 'undated';
     let clock = followUpClocks.get(timeZone);
     if (!clock) {
