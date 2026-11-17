@@ -133,7 +133,10 @@ separated with `/` and write missing values as `-`.
 - `b1=<work key or historical UUID>/<activity or milestone>/<start>/<end>/<budget>`
   records one baseline row. Repeat as `b2`, `b3` and so on. The removed
   work's UUID stands in for a work key. Milestones put their planned
-  moment in start and leave the end and budget absent.
+  moment in start and leave the end and budget absent. Append optional
+  `/<title>/<ref>` fields for the captured strings. A missing title before a
+  reference key is `-`. Encode the literal string `-` as `%2D` in either
+  field, and use the same text escapes as other readable fields.
 - `x1=<work key>/<actual start>/<actual finish>/<actual cost>` records
   actuals for live work. A milestone has only actual finish. List each
   work key at most once.

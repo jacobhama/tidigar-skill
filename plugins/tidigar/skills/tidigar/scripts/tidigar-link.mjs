@@ -811,10 +811,12 @@ const scope = { crypto: globalThis.crypto };
   }
 
   function baselineItem(item) {
-    const { id, type, start, end, estimatedCostMinor } = item;
+    const { id, type, start, end, estimatedCostMinor, title, ref } = item;
     return {
       id,
       ...(type === 'milestone' ? { type } : {}),
+      ...(title ? { title } : {}),
+      ...(ref ? { ref } : {}),
       ...(start === undefined ? {} : { start }),
       ...(end === undefined ? {} : { end }),
       ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
@@ -844,16 +846,18 @@ const scope = { crypto: globalThis.crypto };
     const items = requireArray(source.items, path + '.items', MAX_ITEMS).map((record, index) => {
       const where = path + '.items[' + index + ']';
       const item = requireRecord(record, where);
-      const { type, start, end, estimatedCostMinor } = item;
+      const { type, start, end, estimatedCostMinor, title, ref } = item;
       if (type !== undefined && type !== 'milestone')
         invalid(where + '.type', 'must be a milestone or omitted for an activity');
       const fields =
         type === 'milestone'
-          ? ['id', 'type', 'start']
-          : ['id', 'start', 'end', 'estimatedCostMinor'];
+          ? ['id', 'type', 'start', 'title', 'ref']
+          : ['id', 'start', 'end', 'estimatedCostMinor', 'title', 'ref'];
       if (Object.keys(item).some((key) => !fields.includes(key)))
         invalid(where, 'contains unsupported fields');
       const id = ids.add(item.id, where + '.id');
+      if (title !== undefined) stringValue(title, where + '.title', 180, false);
+      refValue(ref, where + '.ref');
       if (start !== undefined) scaleValue(start, where + '.start');
       if (end !== undefined) scaleValue(end, where + '.end');
       if (
@@ -2015,19 +2019,30 @@ const scope = { crypto: globalThis.crypto };
   }
 
   const CALENDAR_BASELINE_VERSION = 3;
+  const CALENDAR_NAMED_BASELINE_VERSION = 4;
   const CALENDAR_BASELINE_CHUNK_SIZE = 100;
+  const CALENDAR_BASELINE_MAX_NOTES_BYTES = 16_384;
 
-  async function calendarBaselineChunkID(items) {
-    // Match Swift's sorted ASCII JSON. Baseline rows contain only known keys,
-    // ASCII UUIDs and date strings, and integers.
+  function calendarNotesBytes(json, version) {
+    const marker = `TIDIGAR-METADATA-V${version}`;
+    return new TextEncoder().encode(
+      `Tidigar calendar metadata.\n--- ${marker} ---\n${json}\n--- END ${marker} ---`,
+    ).length;
+  }
+
+  function sortedBaselineRow(row) {
+    return Object.fromEntries(
+      Object.keys(row)
+        .sort()
+        .map((key) => [key, row[key]]),
+    );
+  }
+
+  async function calendarBaselineChunkID(payload, version) {
+    // Match Swift's compact sorted UTF-8 JSON. Version 3 hashed only the rows.
+    const rows = payload.baseline?.map(sortedBaselineRow);
     const json = JSON.stringify(
-      items.map((item) =>
-        Object.fromEntries(
-          Object.keys(item)
-            .sort()
-            .map((key) => [key, item[key]]),
-        ),
-      ),
+      version === CALENDAR_BASELINE_VERSION ? rows : rows ? { baseline: rows } : payload,
     );
     const crypto =
       root.crypto || (typeof require === 'function' ? require('node:crypto').webcrypto : null);
@@ -2050,78 +2065,138 @@ const scope = { crypto: globalThis.crypto };
     return JSON.stringify({ format: CALENDAR_METADATA_FORMAT, version, section, payload });
   }
 
+  function calendarBaselineGroups(items, maxBytes = Infinity) {
+    const encoder = new TextEncoder();
+    const groups = [];
+    let group = [];
+    let bytes = 0;
+    for (const item of items) {
+      const size = encoder.encode(JSON.stringify(item)).length;
+      if (
+        group.length === CALENDAR_BASELINE_CHUNK_SIZE ||
+        (group.length && bytes + 1 + size > maxBytes)
+      ) {
+        groups.push(group);
+        group = [];
+        bytes = 0;
+      }
+      bytes += size + (group.length ? 1 : 0);
+      group.push(item);
+    }
+    if (group.length) groups.push(group);
+    return groups;
+  }
+
   /** Encode the manifest and content-addressed baseline Notes sections. */
   async function serializeCalendarBaseline(project) {
     const { dimensions, baseline, ...manifest } = normalizeProject(project).manifest;
     if (!baseline) return { manifest: serializeCalendarMetadata(project, 'manifest'), chunks: [] };
     const { items, ...header } = baseline;
+    const named = items.some(({ title, ref }) => title !== undefined || ref !== undefined);
+    const version = named ? CALENDAR_NAMED_BASELINE_VERSION : CALENDAR_BASELINE_VERSION;
+    const empty = calendarEnvelope('baseline', { baseline: [] }, version);
     const chunks = [];
-    for (let start = 0; start < items.length; start += CALENDAR_BASELINE_CHUNK_SIZE) {
-      const rows = items.slice(start, start + CALENDAR_BASELINE_CHUNK_SIZE);
-      chunks.push({
-        id: await calendarBaselineChunkID(rows),
-        notes: calendarEnvelope('baseline', { baseline: rows }, CALENDAR_BASELINE_VERSION),
-      });
+    async function addChunk(payload) {
+      const id = await calendarBaselineChunkID(payload, version);
+      chunks.push({ id, notes: calendarEnvelope('baseline', payload, version) });
+      return id;
     }
-    manifest.baseline = { ...header, chunks: chunks.map(({ id }) => id) };
-    return {
-      manifest: calendarEnvelope('manifest', { manifest }, CALENDAR_BASELINE_VERSION),
-      chunks,
-    };
+    const ids = [];
+    for (const rows of calendarBaselineGroups(
+      items,
+      CALENDAR_BASELINE_MAX_NOTES_BYTES - calendarNotesBytes(empty, version),
+    ))
+      ids.push(await addChunk({ baseline: rows }));
+    if (ids.length <= CALENDAR_BASELINE_CHUNK_SIZE) manifest.baseline = { ...header, chunks: ids };
+    else {
+      const chunkPages = [];
+      for (const group of calendarBaselineGroups(ids))
+        chunkPages.push(await addChunk({ chunks: group }));
+      manifest.baseline = { ...header, chunkPages };
+    }
+    const notes = calendarEnvelope('manifest', { manifest }, version);
+    if (calendarNotesBytes(notes, version) > CALENDAR_BASELINE_MAX_NOTES_BYTES)
+      invalid('manifest.baseline', 'calendar manifest exceeds the Notes byte limit');
+    return { manifest: notes, chunks };
   }
 
   /** Assemble a snapshot only after all declared chunks are present and verified. */
   async function deserializeCalendarBaseline(manifestText, chunks = []) {
+    const envelope = parseJsonInput(manifestText, 'calendarMetadata');
+    const version = envelope?.version;
+    if (version === CALENDAR_METADATA_VERSION)
+      return deserializeCalendarMetadata(envelope, 'manifest');
+    if (![CALENDAR_BASELINE_VERSION, CALENDAR_NAMED_BASELINE_VERSION].includes(version))
+      invalid('calendarMetadata', 'unsupported tracking envelope');
     function decode(value, section) {
-      const envelope = requireRecord(parseJsonInput(value, 'calendarMetadata'), 'calendarMetadata');
-      exactKeys(envelope, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
+      const record = requireRecord(parseJsonInput(value, 'calendarMetadata'), 'calendarMetadata');
+      exactKeys(record, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
       if (
-        envelope.format !== CALENDAR_METADATA_FORMAT ||
-        envelope.section !== section ||
-        envelope.version !== CALENDAR_BASELINE_VERSION
+        record.format !== CALENDAR_METADATA_FORMAT ||
+        record.section !== section ||
+        record.version !== version
       )
         invalid('calendarMetadata', 'unsupported tracking envelope');
-      const payload = requireRecord(envelope.payload, 'calendarMetadata.payload');
-      exactKeys(payload, [section], 'calendarMetadata.payload');
-      return payload[section];
+      return requireRecord(record.payload, 'calendarMetadata.payload');
     }
-    const envelope = parseJsonInput(manifestText, 'calendarMetadata');
-    if (envelope?.version === CALENDAR_METADATA_VERSION)
-      return deserializeCalendarMetadata(envelope, 'manifest');
-    const checked = requireRecord(decode(envelope, 'manifest'), 'manifest');
+    const payload = decode(envelope, 'manifest');
+    exactKeys(payload, ['manifest'], 'calendarMetadata.payload');
+    const checked = requireRecord(payload.manifest, 'manifest');
     if (hasOwn(checked, 'dimensions')) invalid('manifest.dimensions', 'belong to dimension events');
-    const { chunks: ids, ...baseline } = requireRecord(checked.baseline, 'manifest.baseline');
+    const {
+      chunks: ids,
+      chunkPages,
+      ...baseline
+    } = requireRecord(checked.baseline, 'manifest.baseline');
     exactKeys(
       baseline,
       ['capturedAt', ...(baseline.costCurrency === undefined ? [] : ['costCurrency'])],
       'manifest.baseline',
     );
-    const listed = requireArray(
-      ids,
-      'manifest.baseline.chunks',
-      MAX_ITEMS / CALENDAR_BASELINE_CHUNK_SIZE,
-    );
+    const path = 'manifest.baseline.chunks';
+    const paged = chunkPages !== undefined;
+    if (paged && (version === CALENDAR_BASELINE_VERSION || ids !== undefined))
+      invalid(path, 'unexpected baseline chunk pages');
+    const listed = requireArray(paged ? chunkPages : ids, path, CALENDAR_BASELINE_CHUNK_SIZE);
     const seen = makeIdRegistry();
     const notes = new Map();
     for (const chunk of chunks) {
-      if (notes.has(chunk.id)) invalid('manifest.baseline.chunks', 'duplicate chunk');
+      if (notes.has(chunk.id)) invalid(path, 'duplicate chunk');
       notes.set(chunk.id, chunk.notes);
     }
-    const items = [];
-    for (const [index, candidate] of listed.entries()) {
-      const id = seen.add(candidate, 'manifest.baseline.chunks');
-      if (!notes.has(id)) invalid('manifest.baseline.chunks', 'missing baseline chunk');
-      const rows = requireArray(
-        decode(notes.get(id), 'baseline'),
-        'baseline',
-        CALENDAR_BASELINE_CHUNK_SIZE,
-      );
+    async function readChunk(candidate, field) {
+      const id = seen.add(candidate, path);
+      if (!notes.has(id)) invalid(path, 'missing baseline chunk');
+      const raw = notes.get(id);
+      const content = decode(raw, 'baseline');
+      exactKeys(content, [field], 'baseline');
+      const values = requireArray(content[field], field, CALENDAR_BASELINE_CHUNK_SIZE);
+      if (field === 'baseline' && values.some((row) => !isRecord(row)))
+        invalid(path, 'invalid baseline row');
       if (
-        !rows.length ||
-        (index !== listed.length - 1 && rows.length !== CALENDAR_BASELINE_CHUNK_SIZE) ||
-        (await calendarBaselineChunkID(rows)) !== id
+        !values.length ||
+        calendarNotesBytes(typeof raw === 'string' ? raw : JSON.stringify(raw), version) >
+          CALENDAR_BASELINE_MAX_NOTES_BYTES ||
+        (await calendarBaselineChunkID(content, version)) !== id
       )
-        invalid('manifest.baseline.chunks', 'invalid baseline chunk');
+        invalid(path, 'invalid baseline chunk');
+      return values;
+    }
+    const leaves = [];
+    for (const id of listed) {
+      if (paged) leaves.push(...(await readChunk(id, 'chunks')));
+      else leaves.push(id);
+    }
+    const items = [];
+    for (const [index, candidate] of leaves.entries()) {
+      const rows = await readChunk(candidate, 'baseline');
+      if (
+        (version === CALENDAR_BASELINE_VERSION &&
+          ((index !== leaves.length - 1 && rows.length !== CALENDAR_BASELINE_CHUNK_SIZE) ||
+            rows.some((row) => hasOwn(row, 'title') || hasOwn(row, 'ref')))) ||
+        items.length + rows.length > MAX_ITEMS
+      )
+        invalid(path, 'invalid baseline chunk');
       items.push(...rows);
     }
     return {
@@ -3615,8 +3690,12 @@ const scope = { crypto: globalThis.crypto };
           time(header[1]),
           ordered(lists.b, 'b').map(({ key, value }) => {
             const fields = value.split('/');
-            if (fields.length !== 5) return failAt(key, 'expected ID, kind, start, end and budget');
-            const [id, kind, start, end, budget] = fields;
+            if (fields.length < 5 || fields.length > 7)
+              return failAt(
+                key,
+                'expected ID, kind, start, end, budget and optional title and ref',
+              );
+            const [id, kind, start, end, budget, title = '-', ref = '-'] = fields;
             if (!['activity', 'milestone'].includes(kind))
               return failAt(key, 'unknown baseline record kind');
             return [
@@ -3625,6 +3704,8 @@ const scope = { crypto: globalThis.crypto };
               time(start),
               time(end),
               amount(budget, key),
+              ...(fields.length > 5 ? [title === '-' ? null : text(title)] : []),
+              ...(fields.length > 6 ? [ref === '-' ? null : text(ref)] : []),
             ];
           }),
         ];
@@ -3858,7 +3939,9 @@ const scope = { crypto: globalThis.crypto };
       .map((character) =>
         character === ' '
           ? '_'
-          : ESCAPED.has(character) || also.includes(character) || /\s/.test(character)
+          : ESCAPED.has(character) ||
+              also.includes(character) ||
+              /[\s\x00-\x1f\x7f]/.test(character)
             ? encodeURIComponent(character).replace(
                 /^[^%]$/,
                 `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`,
@@ -3981,11 +4064,13 @@ const scope = { crypto: globalThis.crypto };
     if (payload.b) {
       const [capturedAt, currency, baseline] = payload.b;
       records.push(`b=${capturedAt}/${currency ?? '-'}`);
-      for (const [index, [id, type, start, end, cost]] of baseline.entries()) {
+      for (const [index, [id, type, start, end, cost, title, ref]] of baseline.entries()) {
         const target = typeof id === 'number' ? keyOf(id) : id;
-        records.push(
-          `b${index + 1}=${[target, type ?? 'activity', start ?? '-', end ?? '-', cost ?? '-'].join('/')}`,
-        );
+        const row = [target, type ?? 'activity', start ?? '-', end ?? '-', cost ?? '-'];
+        const label = (value) => (value === '-' ? '%2D' : field(value));
+        if (title != null || ref != null) row.push(title == null ? '-' : label(title));
+        if (ref != null) row.push(label(ref));
+        records.push(`b${index + 1}=${row.join('/')}`);
       }
     }
     for (const [index, [id, start, finish, cost]] of (payload.x || []).entries())
@@ -4589,12 +4674,13 @@ const scope = { crypto: globalThis.crypto };
         payload.b = [
           capturedAt,
           costCurrency ?? null,
-          items.map(({ id, type, start, end, estimatedCostMinor }) => [
+          items.map(({ id, type, start, end, estimatedCostMinor, title, ref }) => [
             indices.get(id) ?? id,
             type ?? null,
             start ?? null,
             end ?? null,
             estimatedCostMinor ?? null,
+            ...(ref ? [title ?? null, ref] : title ? [title] : []),
           ]),
         ];
       }
@@ -4932,13 +5018,17 @@ const scope = { crypto: globalThis.crypto };
           capturedAt,
           ...(costCurrency === null ? {} : { costCurrency }),
           items: list(rows).map((entry) => {
-            const [target, type, start, end, estimatedCostMinor] = entries(entry, 5);
+            if (!Array.isArray(entry) || entry.length < 5 || entry.length > 7)
+              fail('invalid', 'The share link has malformed tracking data.');
+            const [target, type, start, end, estimatedCostMinor, title = null, ref = null] = entry;
             return {
               id: typeof target === 'string' ? target : at(raw.items, target).id,
               ...(type === null ? {} : { type }),
               ...(start === null ? {} : { start }),
               ...(end === null ? {} : { end }),
               ...(estimatedCostMinor === null ? {} : { estimatedCostMinor }),
+              ...(title === null ? {} : { title }),
+              ...(ref === null ? {} : { ref }),
             };
           }),
         };
@@ -5180,6 +5270,9 @@ const scope = { crypto: globalThis.crypto };
             if (!allowed.has('baselineCost')) delete snapshot.costCurrency;
             snapshot.items = snapshot.items.filter(({ id }) => !hiddenMilestones.has(id));
             for (const row of snapshot.items) {
+              // Published tracking never needs historical names or reference keys.
+              delete row.title;
+              delete row.ref;
               if (!allowed.has('baselineDates')) {
                 delete row.start;
                 delete row.end;
