@@ -1840,6 +1840,13 @@ const scope = { crypto: globalThis.crypto };
     return project;
   }
 
+  /** Copy the plan without organisation-specific references. */
+  function withoutPlanLinks(value) {
+    const project = normalizeProject(value);
+    for (const item of project.items) delete item.source;
+    return project;
+  }
+
   /*
    * The prefix a project's reference keys start with, from its name: the
    * initials of two or three words, otherwise the first two letters. Letters
@@ -2074,194 +2081,11 @@ const scope = { crypto: globalThis.crypto };
     return matches[0];
   }
 
-  const CALENDAR_BASELINE_VERSION = 3;
-  const CALENDAR_NAMED_BASELINE_VERSION = 4;
-  const CALENDAR_BASELINE_CHUNK_SIZE = 100;
-  const CALENDAR_BASELINE_MAX_NOTES_BYTES = 16_384;
-
-  function calendarNotesBytes(json, version) {
-    const marker = `TIDIGAR-METADATA-V${version}`;
-    return new TextEncoder().encode(
-      `Tidigar calendar metadata.\n--- ${marker} ---\n${json}\n--- END ${marker} ---`,
-    ).length;
-  }
-
-  function sortedBaselineRow(row) {
-    return Object.fromEntries(
-      Object.keys(row)
-        .sort()
-        .map((key) => [key, row[key]]),
-    );
-  }
-
-  async function calendarBaselineChunkID(payload, version) {
-    // Match Swift's compact sorted UTF-8 JSON. Version 3 hashed only the rows.
-    const rows = payload.baseline?.map(sortedBaselineRow);
-    const json = JSON.stringify(
-      version === CALENDAR_BASELINE_VERSION ? rows : rows ? { baseline: rows } : payload,
-    );
-    const crypto =
-      root.crypto || (typeof require === 'function' ? require('node:crypto').webcrypto : null);
-    const bytes = new Uint8Array(
-      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)),
-    ).slice(0, 16);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    return [
-      hex.slice(0, 8),
-      hex.slice(8, 12),
-      hex.slice(12, 16),
-      hex.slice(16, 20),
-      hex.slice(20),
-    ].join('-');
-  }
-
-  function calendarEnvelope(section, payload, version) {
-    return JSON.stringify({ format: CALENDAR_METADATA_FORMAT, version, section, payload });
-  }
-
-  function calendarBaselineGroups(items, maxBytes = Infinity) {
-    const encoder = new TextEncoder();
-    const groups = [];
-    let group = [];
-    let bytes = 0;
-    for (const item of items) {
-      const size = encoder.encode(JSON.stringify(item)).length;
-      if (
-        group.length === CALENDAR_BASELINE_CHUNK_SIZE ||
-        (group.length && bytes + 1 + size > maxBytes)
-      ) {
-        groups.push(group);
-        group = [];
-        bytes = 0;
-      }
-      bytes += size + (group.length ? 1 : 0);
-      group.push(item);
-    }
-    if (group.length) groups.push(group);
-    return groups;
-  }
-
-  /** Encode the manifest and content-addressed baseline Notes sections. */
-  async function serializeCalendarBaseline(project) {
-    const { dimensions, baseline, ...manifest } = normalizeProject(project).manifest;
-    if (!baseline) return { manifest: serializeCalendarMetadata(project, 'manifest'), chunks: [] };
-    const { items, ...header } = baseline;
-    const named = items.some(({ title, ref }) => title !== undefined || ref !== undefined);
-    const version = named ? CALENDAR_NAMED_BASELINE_VERSION : CALENDAR_BASELINE_VERSION;
-    const empty = calendarEnvelope('baseline', { baseline: [] }, version);
-    const chunks = [];
-    async function addChunk(payload) {
-      const id = await calendarBaselineChunkID(payload, version);
-      chunks.push({ id, notes: calendarEnvelope('baseline', payload, version) });
-      return id;
-    }
-    const ids = [];
-    for (const rows of calendarBaselineGroups(
-      items,
-      CALENDAR_BASELINE_MAX_NOTES_BYTES - calendarNotesBytes(empty, version),
-    ))
-      ids.push(await addChunk({ baseline: rows }));
-    if (ids.length <= CALENDAR_BASELINE_CHUNK_SIZE) manifest.baseline = { ...header, chunks: ids };
-    else {
-      const chunkPages = [];
-      for (const group of calendarBaselineGroups(ids))
-        chunkPages.push(await addChunk({ chunks: group }));
-      manifest.baseline = { ...header, chunkPages };
-    }
-    const notes = calendarEnvelope('manifest', { manifest }, version);
-    if (calendarNotesBytes(notes, version) > CALENDAR_BASELINE_MAX_NOTES_BYTES)
-      invalid('manifest.baseline', 'calendar manifest exceeds the Notes byte limit');
-    return { manifest: notes, chunks };
-  }
-
-  /** Assemble a snapshot only after all declared chunks are present and verified. */
-  async function deserializeCalendarBaseline(manifestText, chunks = []) {
-    const envelope = parseJsonInput(manifestText, 'calendarMetadata');
-    const version = envelope?.version;
-    if (version === CALENDAR_METADATA_VERSION)
-      return deserializeCalendarMetadata(envelope, 'manifest');
-    if (![CALENDAR_BASELINE_VERSION, CALENDAR_NAMED_BASELINE_VERSION].includes(version))
-      invalid('calendarMetadata', 'unsupported tracking envelope');
-    function decode(value, section) {
-      const record = requireRecord(parseJsonInput(value, 'calendarMetadata'), 'calendarMetadata');
-      exactKeys(record, ['format', 'version', 'section', 'payload'], 'calendarMetadata');
-      if (
-        record.format !== CALENDAR_METADATA_FORMAT ||
-        record.section !== section ||
-        record.version !== version
-      )
-        invalid('calendarMetadata', 'unsupported tracking envelope');
-      return requireRecord(record.payload, 'calendarMetadata.payload');
-    }
-    const payload = decode(envelope, 'manifest');
-    exactKeys(payload, ['manifest'], 'calendarMetadata.payload');
-    const checked = requireRecord(payload.manifest, 'manifest');
-    if (hasOwn(checked, 'dimensions')) invalid('manifest.dimensions', 'belong to dimension events');
-    const {
-      chunks: ids,
-      chunkPages,
-      ...baseline
-    } = requireRecord(checked.baseline, 'manifest.baseline');
-    exactKeys(
-      baseline,
-      ['capturedAt', ...(baseline.costCurrency === undefined ? [] : ['costCurrency'])],
-      'manifest.baseline',
-    );
-    const path = 'manifest.baseline.chunks';
-    const paged = chunkPages !== undefined;
-    if (paged && (version === CALENDAR_BASELINE_VERSION || ids !== undefined))
-      invalid(path, 'unexpected baseline chunk pages');
-    const listed = requireArray(paged ? chunkPages : ids, path, CALENDAR_BASELINE_CHUNK_SIZE);
-    const seen = makeIdRegistry();
-    const notes = new Map();
-    for (const chunk of chunks) {
-      if (notes.has(chunk.id)) invalid(path, 'duplicate chunk');
-      notes.set(chunk.id, chunk.notes);
-    }
-    async function readChunk(candidate, field) {
-      const id = seen.add(candidate, path);
-      if (!notes.has(id)) invalid(path, 'missing baseline chunk');
-      const raw = notes.get(id);
-      const content = decode(raw, 'baseline');
-      exactKeys(content, [field], 'baseline');
-      const values = requireArray(content[field], field, CALENDAR_BASELINE_CHUNK_SIZE);
-      if (field === 'baseline' && values.some((row) => !isRecord(row)))
-        invalid(path, 'invalid baseline row');
-      if (
-        !values.length ||
-        calendarNotesBytes(typeof raw === 'string' ? raw : JSON.stringify(raw), version) >
-          CALENDAR_BASELINE_MAX_NOTES_BYTES ||
-        (await calendarBaselineChunkID(content, version)) !== id
-      )
-        invalid(path, 'invalid baseline chunk');
-      return values;
-    }
-    const leaves = [];
-    for (const id of listed) {
-      if (paged) leaves.push(...(await readChunk(id, 'chunks')));
-      else leaves.push(id);
-    }
-    const items = [];
-    for (const [index, candidate] of leaves.entries()) {
-      const rows = await readChunk(candidate, 'baseline');
-      if (
-        (version === CALENDAR_BASELINE_VERSION &&
-          ((index !== leaves.length - 1 && rows.length !== CALENDAR_BASELINE_CHUNK_SIZE) ||
-            rows.some((row) => hasOwn(row, 'title') || hasOwn(row, 'ref')))) ||
-        items.length + rows.length > MAX_ITEMS
-      )
-        invalid(path, 'invalid baseline chunk');
-      items.push(...rows);
-    }
-    return {
-      manifest: deserializeManifest({
-        ...checked,
-        dimensions: [],
-        baseline: { ...baseline, items },
-      }),
-    };
+  /** A calendar copy retains live actuals and omits the baseline snapshot. */
+  function copyForCalendar(project) {
+    const copy = withoutPlanLinks(project);
+    delete copy.manifest.baseline;
+    return copy;
   }
 
   /*
@@ -2274,7 +2098,7 @@ const scope = { crypto: globalThis.crypto };
     let payload;
     if (section === 'manifest') {
       if (normalized.manifest.baseline)
-        invalid('manifest.baseline', 'encode its content-addressed calendar chunks');
+        invalid('manifest.baseline', 'not supported in calendar plans');
       const { dimensions: _dimensions, ...manifest } = JSON.parse(
         serializeManifest(normalized.manifest),
       );
@@ -2311,7 +2135,6 @@ const scope = { crypto: globalThis.crypto };
       invalid('calendarMetadata.format', 'unsupported');
     if (source.version !== CALENDAR_METADATA_VERSION)
       invalid('calendarMetadata.version', 'unsupported');
-    const context = contextInput && typeof contextInput === 'object' ? contextInput : null;
     if (!CALENDAR_METADATA_SECTIONS.has(section))
       invalid('section', 'must be manifest, view or dimension');
     if (source.section !== section) invalid('calendarMetadata.section', 'unexpected section');
@@ -2321,6 +2144,8 @@ const scope = { crypto: globalThis.crypto };
       const manifest = requireRecord(payload.manifest, 'calendarMetadata.payload.manifest');
       if (hasOwn(manifest, 'dimensions'))
         invalid('calendarMetadata.payload.manifest.dimensions', 'belong to dimension events');
+      if (hasOwn(manifest, 'baseline'))
+        invalid('calendarMetadata.payload.manifest.baseline', 'not supported in calendar plans');
       return { manifest: deserializeManifest({ ...manifest, dimensions: [] }) };
     }
     if (section === 'dimension') {
@@ -2443,6 +2268,7 @@ const scope = { crypto: globalThis.crypto };
     assigneeAxis: ASSIGNEE_AXIS,
     validAssignee,
     withoutAssignees,
+    withoutPlanLinks,
     progressAxis: PROGRESS_AXIS,
     followUpColor: FOLLOW_UP_COLOR,
     enumValues: ENUM_VALUES,
@@ -2500,10 +2326,9 @@ const scope = { crypto: globalThis.crypto };
     deserializeItems,
     serializeViews,
     deserializeViews,
+    copyForCalendar,
     serializeCalendarMetadata,
     deserializeCalendarMetadata,
-    serializeCalendarBaseline,
-    deserializeCalendarBaseline,
     encodeFile,
     decodeFile,
     encodeBackup,
