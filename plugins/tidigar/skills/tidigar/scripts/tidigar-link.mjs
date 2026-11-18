@@ -414,6 +414,24 @@ const scope = { crypto: globalThis.crypto };
     return validEstimatedCost(amount) ? amount : null;
   };
 
+  /** Forecast final activity cost from completion, current estimate and recorded actuals. */
+  function forecastCost(item, baseline) {
+    const current = trackingCost(item, 'estimatedCostMinor');
+    const actual = trackingCost(item, 'actualCostMinor');
+    const forecastMinor =
+      Number(item?.progress) === 100 && actual !== null
+        ? actual
+        : current === null && actual === null
+          ? null
+          : Math.max(current ?? 0, actual ?? 0);
+    const budget = trackingCost(baseline, 'estimatedCostMinor');
+    return {
+      forecastMinor,
+      forecastVarianceMinor:
+        forecastMinor === null || budget === null ? null : forecastMinor - budget,
+    };
+  }
+
   function trackingVariance(baseline, start, finish, cost, calendar) {
     const budget = trackingCost(baseline, 'estimatedCostMinor');
     return {
@@ -444,13 +462,22 @@ const scope = { crypto: globalThis.crypto };
       new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
     const baselineById = trackedById(baselineItems);
     const currentById = trackedById(currentItems);
-    const amounts = { baseline: [], current: [], actual: [], vsCurrent: [], vsActual: [] };
+    const amounts = {
+      baseline: [],
+      current: [],
+      actual: [],
+      forecast: [],
+      vsCurrent: [],
+      vsActual: [],
+      vsForecast: [],
+    };
     const rows = [];
     for (const id of new Set([...currentById.keys(), ...baselineById.keys()])) {
       const baseline = baselineById.get(id);
       const current = currentById.get(id);
       const currentCost = trackingCost(current, 'estimatedCostMinor');
       const actualCost = trackingCost(current, 'actualCostMinor');
+      const forecast = forecastCost(current, baseline);
       const vsCurrent = trackingVariance(
         baseline,
         activityField(current, 'start'),
@@ -478,10 +505,12 @@ const scope = { crypto: globalThis.crypto };
       if (currentCanCarryCost) {
         amounts.current.push(currentCost);
         amounts.actual.push(actualCost);
+        amounts.forecast.push(forecast.forecastMinor);
       }
       if (baselineCanCarryCost && currentCanCarryCost) {
         amounts.vsCurrent.push(vsCurrent.costMinor);
         amounts.vsActual.push(vsActual.costMinor);
+        amounts.vsForecast.push(forecast.forecastVarianceMinor);
       }
     }
     return {
@@ -1510,6 +1539,8 @@ const scope = { crypto: globalThis.crypto };
     'actualCostMinor',
     'currentCostVarianceMinor',
     'actualCostVarianceMinor',
+    'forecastMinor',
+    'forecastVarianceMinor',
   ]);
   const TRACKING_LIST_COLUMNS = Object.freeze([
     ...SCHEDULE_TRACKING_COLUMNS,
@@ -1532,6 +1563,8 @@ const scope = { crypto: globalThis.crypto };
     actualCostMinor: ['actualCostMinor'],
     currentCostVarianceMinor: ['baselineCost'],
     actualCostVarianceMinor: ['baselineCost', 'actualCostMinor'],
+    forecastMinor: ['actualCostMinor'],
+    forecastVarianceMinor: ['baselineCost', 'actualCostMinor'],
   });
   const screenTrackingFields = (view) =>
     view?.view === 'timeline'
@@ -2438,6 +2471,7 @@ const scope = { crypto: globalThis.crypto };
     timeAfter,
     followUpStatus,
     compareBaseline,
+    forecastCost,
     scheduledFinish,
     timelineTracking,
     listColumnKeys: LIST_COLUMN_KEYS,
