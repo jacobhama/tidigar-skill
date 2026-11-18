@@ -1657,6 +1657,9 @@ const scope = { crypto: globalThis.crypto };
       // longer exists sorts by Start, as unknown columns are dropped.
       const listSort = source.listSort === undefined ? '' : source.listSort;
       if (typeof listSort !== 'string') invalid(`${path}.listSort`, 'expected a column key');
+      const listCostGroup = source.listCostGroup ?? '';
+      if (typeof listCostGroup !== 'string')
+        invalid(`${path}.listCostGroup`, 'expected a dimension key');
       return {
         id,
         projectId,
@@ -1763,6 +1766,8 @@ const scope = { crypto: globalThis.crypto };
           columnKeys,
           `${path}.listColumnOrder`,
         ),
+        listCostGroup:
+          dimensions.has(listCostGroup) || listCostGroup === ASSIGNEE_AXIS ? listCostGroup : '',
         listSort: columnKeys.has(listSort) ? listSort : '',
         listSortDescending: booleanValue(
           source.listSortDescending,
@@ -2492,7 +2497,7 @@ const scope = { crypto: globalThis.crypto };
 })(typeof globalThis !== 'undefined' ? globalThis : this, function projectRepairModule() {
   'use strict';
 
-  const VIEW_DIMENSIONS = ['row', 'col', 'color', 'flowGroup', 'group'];
+  const VIEW_DIMENSIONS = ['row', 'col', 'color', 'flowGroup', 'group', 'listCostGroup'];
 
   const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   const list = (value) => (Array.isArray(value) ? value.filter(isRecord) : []);
@@ -2548,7 +2553,10 @@ const scope = { crypto: globalThis.crypto };
               typeof view[field] === 'string' &&
               view[field] &&
               !options.has(view[field]) &&
-              !(view[field] === 'assignee' && ['row', 'col', 'group', 'color'].includes(field)) &&
+              !(
+                view[field] === 'assignee' &&
+                ['row', 'col', 'group', 'color', 'listCostGroup'].includes(field)
+              ) &&
               !(view[field] === 'progress' && ['row', 'col', 'color'].includes(field)) &&
               !(field === 'color' && view.color === 'follow-up-status')
             ) {
@@ -2719,7 +2727,15 @@ const scope = { crypto: globalThis.crypto };
     pink: 'd94f70',
     brown: '9a6b4f',
   };
-  const DIMENSION_FIELDS = ['row', 'col', 'color', 'group', 'flowGroup', 'timelineSummarizeBy'];
+  const DIMENSION_FIELDS = [
+    'row',
+    'col',
+    'color',
+    'group',
+    'flowGroup',
+    'timelineSummarizeBy',
+    'listCostGroup',
+  ];
   // View names as people write them, in English and the app's languages.
   const VIEW_NAMES = new Map(
     Object.entries({
@@ -3474,7 +3490,13 @@ const scope = { crypto: globalThis.crypto };
   const COLORS = ['4f7cff', '16a34a', 'f59e0b', '8a52c1', '0891b2', 'dc5f5f', '64748b', 'db2777'];
   const PERIOD_COLOR = '9aa7b5';
   const VIEWS = { timeline: 'timeline', board: 'grid', grid: 'grid', list: 'list', flow: 'flow' };
-  const VIEW_AXES = { rows: 'row', columns: 'col', color: 'color', group: 'group' };
+  const VIEW_AXES = {
+    rows: 'row',
+    columns: 'col',
+    color: 'color',
+    group: 'group',
+    'cost-group': 'listCostGroup',
+  };
   const KINDS = { a: 'activity', s: 'milestone', p: 'period' };
   // Words for how a timeline looks: `classic` is one activity per row under
   // a fixed label, as in MS Project, and opens in the Classic saved view a
@@ -3889,7 +3911,7 @@ const scope = { crypto: globalThis.crypto };
         if (!field)
           note(
             'v',
-            `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, start or end`,
+            `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, cost-group, start or end`,
           );
         else if (field === 'color' && name === '@follow-up-status')
           view[field] = 'follow-up-status';
@@ -4186,6 +4208,7 @@ const scope = { crypto: globalThis.crypto };
     'group',
     'flowGroup',
     'timelineSummarizeBy',
+    'listCostGroup',
   ]);
   const COLUMN_FIELDS = new Set(['listColumns', 'listColumnOrder']);
   class ShareLinkError extends Error {

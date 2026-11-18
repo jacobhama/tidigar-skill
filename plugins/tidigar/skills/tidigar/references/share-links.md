@@ -35,8 +35,8 @@ Until the opener is deployed, use `https://app.tidigar.com/#t=1~…` for the web
 | `d=Text`                | its description                                               |
 | `y=2026`                | its year, required: the year of every `MM-DD` date            |
 | `w`                     | plans in work days: Monday to Friday, without periods         |
-| `u=thousands` | display costs in thousands |
-| `k=SEK` | the plan currency for estimated costs, when present |
+| `u=thousands`           | display costs in thousands                                    |
+| `k=SEK`                 | the plan currency for estimated costs, when present           |
 | `r=KEY`                 | the reference key prefix, up to 10 capital letters and digits |
 | `m1=Team:Design,Build`  | a dimension and its options, in order                         |
 | `a1=title/start/days/…` | an activity                                                   |
@@ -100,7 +100,8 @@ p1=Autumn_break/10-26/5
 - `m1=Team:Household,Installer` defines ordered options with standard colors.
 - `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names
   and dates as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
-  Board grouping uses `rows:` and `columns:`.
+  Board grouping uses `rows:` and `columns:`. List cost summary grouping uses
+  `cost-group:`, as in `v=list/cost-group:Team`; omitted means total only.
 - Timeline layout is `classic` (one activity per row, fixed labels and reference
   keys) or `compact` (shared rows). Styles are `minimal`, `airy`, `contrast`
   and `terminal`. A layout or style alone selects the timeline, as in `v=classic`.
