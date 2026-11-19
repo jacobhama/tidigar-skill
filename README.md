@@ -8,6 +8,11 @@ A share link carries a separate copy of the plan. A stored plan is saved for
 your organisation, and changes appear for everyone who opens it. See
 [Connect your AI assistant](https://tidigar.com/agents/cloud) for setup.
 
+The Claude Code and Codex plugins include the connection to
+`https://app.tidigar.com/mcp`. It asks you to sign in only when you work on a
+stored plan; share links need no account. Tidigar Server users add
+`<server>/mcp` instead.
+
 This repository is generated from Tidigar's sources and published as they
 change. Report problems to hello@tidigar.com rather than opening pull
 requests here.
@@ -31,6 +36,8 @@ Then install Tidigar from the plugin list.
 
 ChatGPT and Claude apps: upload
 [tidigar-skill.zip](https://github.com/jacobhama/tidigar-skill/raw/refs/heads/main/tidigar-skill.zip) as a skill.
+For stored plans, add the connector `https://app.tidigar.com/mcp` in the
+app's connector settings.
 
 Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
 
@@ -41,6 +48,8 @@ Agents without skills read [tidigar.com/llms.txt](https://tidigar.com/llms.txt).
   the Claude Code and Codex marketplaces, each listing the one plugin.
 - `plugins/tidigar/.claude-plugin/plugin.json` and `plugins/tidigar/plugin.json`:
   the plugin's manifests for Claude Code and for Codex and ChatGPT.
+- `plugins/tidigar/mcp.json` (Codex) and `mcpServers` in the Claude manifest:
+  the remote MCP connection for stored plans, authorized through OAuth.
 - `plugins/tidigar/skills/tidigar/`: the skill, with `SKILL.md`, the
   reference module under `scripts/`, the examples and the share link
   specification.

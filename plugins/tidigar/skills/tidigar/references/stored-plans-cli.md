@@ -65,15 +65,13 @@ All modes use the same JSON and errors as the [public API](https://tidigar.com/a
   `tidigar activities get <plan-id> <activity-id>` for follow-up and tracking.
   Keep the project's `assignee` as read. It holds the organisation member number.
 - `tidigar plans save-baseline <plan-id> --revision <n> --captured-at <UTC-time> --view-id <UUID>`
-  captures the baseline and Follow-up List together. Keep the same inputs for retries.
-- `tidigar plans replace-baseline <plan-id> --revision <n> --captured-at <UTC-time>`
-  replaces the snapshot with a new capture time.
-- `tidigar plans remove-baseline <plan-id> --revision <n>` clears the snapshot.
-  Both keep actuals and views. Keep the same inputs for retries.
+  captures the baseline and creates a Follow-up List if no saved List shows tracking columns.
+  Keep the same inputs for retries.
+- `tidigar plans create-baseline <plan-id> --revision <n> --baseline-id <UUID> --name <name> --captured-at <UTC-time>`
+  saves a new active baseline. `activate-baseline` and `delete-baseline` take
+  `--revision` and `--baseline-id`. Keep the same inputs for retries.
 - `tidigar activities complete <plan-id> <activity-id> --revision <n>` marks
-  work complete and records actual dates in a tracked plan.
-- `tidigar activities actuals <plan-id> <activity-id> actuals.json --revision <n>` sets
-  `actualStart`, `actualFinish` or `actualCostMinor` from JSON. Use null to clear.
+  work complete.
 - **Comments:** tell the team what was done, decided or found on an activity, as the user:
   `tidigar comments add <plan-id> <activity-id> note.md` posts the file's Markdown, and
   `tidigar comments list <plan-id> <activity-id>` reads the thread newest first (`--before <id>`

@@ -139,7 +139,8 @@ includes a progress Board and backlog List.
    Report 25, 50 or 75 as work advances. Ask the user about merge conflicts.
 4. Comment with `tidigar_add_comment`. Record the result, verification and
    relevant commit or pull request.
-5. Set progress to 100 when done. If blocked, report the predecessor and
+5. Set progress to 100 when done. This records today as the finish unless the
+   same request sends dates. If blocked, report the predecessor and
    required progress and leave the ticket open.
    [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list).
 
@@ -149,17 +150,17 @@ in `fields.description`. Read the same source back with `tidigar_get_activity`.
 An optional prefix selects its reference area. Use `tidigar_assign_activity`
 with an editor's account ID or an empty assignee to clear it.
 
-## Baseline and actuals
+## Baseline
 
 Activity and assigned-work reads include follow-up status and available tracking.
 Use `tidigar_save_baseline` with the plan revision, UTC capture time in whole
-seconds and a new view UUID. To change a saved baseline, use
-`tidigar_replace_baseline` with the revision and a new capture time, or
-`tidigar_remove_baseline` with the revision. Both keep actuals and views.
+seconds and a new view UUID. Up to 20 named baselines are kept:
+`manifest.baseline` is the active one and `earlier` the rest.
+`tidigar_create_baseline` saves a new active one; `tidigar_activate_baseline`
+and `tidigar_delete_baseline` take its `baselineId`. All keep views.
 Repeat the same inputs if the reply is lost. If the revision is stale, read
-the plan again.
-Use `tidigar_set_actuals` with the activity revision and changed actual fields
-(`null` clears). A milestone uses `actualFinish` for occurrence.
+the plan again. Start, end and estimated cost are the current values that
+the baseline is compared with.
 
 ## Comments
 
@@ -215,7 +216,9 @@ schemas supplied by the server define field types and limits.
 | `tidigar_save_baseline` | `id`, `revision`, `capturedAt`, `viewId` |
 | `tidigar_replace_baseline` | `id`, `revision`, `capturedAt` |
 | `tidigar_remove_baseline` | `id`, `revision` |
-| `tidigar_set_actuals` | `id`, `activity`, `revision`, `fields` |
+| `tidigar_create_baseline` | `id`, `revision`, `baselineId`, `name`, `capturedAt` |
+| `tidigar_activate_baseline` | `id`, `revision`, `baselineId` |
+| `tidigar_delete_baseline` | `id`, `revision`, `baselineId` |
 | `tidigar_add_activity` | `id`, `fields`, `prefix?` |
 | `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |
 | `tidigar_assign_activity` | `id`, `activity`, `assignee` |

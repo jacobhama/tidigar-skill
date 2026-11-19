@@ -1,6 +1,6 @@
 {
   "name": "tidigar",
-  "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links.",
+  "description": "Create Tidigar roadmaps and Gantt charts as share links without an account, or connect to read and update plans stored in Tidigar or Tidigar Server.",
   "owner": {
     "name": "Hamacher Software AB",
     "email": "hello@tidigar.com"
@@ -9,7 +9,7 @@
     {
       "name": "tidigar",
       "source": "./plugins/tidigar",
-      "description": "Make Tidigar roadmaps, Gantt charts and project timelines as share links that open as editable plans in Tidigar."
+      "description": "Create Tidigar roadmaps and Gantt charts as share links without an account, or connect to read and update plans stored in Tidigar or Tidigar Server."
     }
   ]
 }

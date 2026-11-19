@@ -106,6 +106,12 @@ const scope = { crypto: globalThis.crypto };
   });
   const currentViewValue = (field, value) => RENAMED_VIEW_VALUES[field][value] ?? value;
   const PROGRESS_VALUES = new Set([0, 25, 50, 75, 100]);
+  // A view may filter on progress as on a dimension, its values the
+  // progress steps as text.
+  const PROGRESS_FILTER = Object.freeze({
+    id: PROGRESS_AXIS,
+    options: Object.freeze([...PROGRESS_VALUES].map((value) => ({ id: String(value) }))),
+  });
   // How far into another activity one may start; 100, after its end, is the
   // default and is never stored.
   const START_AFTER_VALUES = new Set([0, 25, 50, 75]);
@@ -240,22 +246,18 @@ const scope = { crypto: globalThis.crypto };
   const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
   // A milestone is due at its moment, an activity at its end.
   const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
-  // Display intervals use the saved view and only the records it is showing.
-  // Started work extends to the current local day or minute until a finish is recorded.
-  function timelineTracking(
-    project,
-    view,
-    records = project?.items ?? [],
-    { publishedScreen = false, now = Date.now() } = {},
-  ) {
-    // A screen can publish actuals without exposing its baseline.
-    const showActuals =
-      view?.timelineShowActuals && (project?.manifest.baseline || publishedScreen);
+  // Display intervals use the saved view and only the records it is showing,
+  // against `view.comparedBaseline` when given, else the active baseline.
+  function timelineTracking(project, view, records = project?.items ?? []) {
     const baseline = new Map();
-    const actuals = new Map();
     const placements = new Map();
     const saved = view?.timelineShowBaseline
-      ? new Map((project?.manifest.baseline?.items ?? []).map((row) => [row.id, row]))
+      ? new Map(
+          ((view.comparedBaseline ?? project?.manifest.baseline)?.items ?? []).map((row) => [
+            row.id,
+            row,
+          ]),
+        )
       : new Map();
     let first = Infinity;
     let last = -Infinity;
@@ -263,32 +265,14 @@ const scope = { crypto: globalThis.crypto };
     let clock = false;
     for (const item of records) {
       const row = saved.get(item.id);
-      if (row?.start) baseline.set(item.id, row);
-      if (showActuals && (item.actualStart || item.actualFinish)) {
-        const mark = { start: item.actualStart || item.actualFinish };
-        if (item.actualStart && item.actualFinish) mark.end = item.actualFinish;
-        else if (item.actualStart) {
-          const minute = localFollowUpMinute(now, project?.manifest.timeZone),
-            today = isClock(item.actualStart) ? minute : minute.slice(0, 10);
-          mark.end = timeOf(today) < timeOf(item.actualStart) ? item.actualStart : today;
-          mark.ongoing = true;
-        } else mark.type = 'milestone';
-        actuals.set(item.id, mark);
-      }
-      for (const mark of [baseline.get(item.id), actuals.get(item.id)]) {
-        if (!mark) continue;
-        const end = mark.end ?? mark.start;
-        const previous = placements.get(item.id);
-        placements.set(item.id, {
-          start:
-            previous && timeOf(previous.start) < timeOf(mark.start) ? previous.start : mark.start,
-          end: previous && timeAfter(previous.end) > timeAfter(end) ? previous.end : end,
-        });
-        first = Math.min(first, timeOf(mark.start));
-        last = Math.max(last, timeAfter(end));
-        days ||= !isClock(mark.start) || !isClock(end);
-        clock ||= isClock(mark.start) || isClock(end);
-      }
+      if (!row?.start) continue;
+      baseline.set(item.id, row);
+      const end = row.end ?? row.start;
+      placements.set(item.id, { start: row.start, end });
+      first = Math.min(first, timeOf(row.start));
+      last = Math.max(last, timeAfter(end));
+      days ||= !isClock(row.start) || !isClock(end);
+      clock ||= isClock(row.start) || isClock(end);
     }
     const room = days ? DAY : DAY / 24;
     const range =
@@ -299,7 +283,7 @@ const scope = { crypto: globalThis.crypto };
             clock,
           }
         : null;
-    return { baseline, actuals, placements, range };
+    return { baseline, placements, range };
   }
   const followUpClocks = new Map();
   const followUpBaselines = new WeakMap();
@@ -311,22 +295,15 @@ const scope = { crypto: globalThis.crypto };
     return followUpBaselines.get(rows).get(id);
   }
 
-  /** Compare open due dates and recorded finishes against the saved due date. */
+  /** Compare the current due date of open and completed work against the saved due date. */
   function followUpStatus(
     item,
-    {
-      project,
-      now = Date.now(),
-      timeZone = project?.manifest?.timeZone,
-      actualFinish = project ? item.actualFinish : undefined,
-      baselineDue,
-    } = {},
+    { project, now = Date.now(), timeZone = project?.manifest?.timeZone, baselineDue } = {},
   ) {
     const due = scheduledFinish(item);
     if (Number(item.progress) === 100) {
-      if (!actualFinish) return 'done';
       const reference = baselineDue ?? baselineFinish(project, item.id) ?? due;
-      return timeOf(actualFinish) >= timeAfter(reference) ? 'done-late' : 'done';
+      return due && reference && timeOf(due) >= timeAfter(reference) ? 'done-late' : 'done';
     }
     if (!due) return 'undated';
     const localMinute = localFollowUpMinute(now, timeZone);
@@ -356,38 +333,32 @@ const scope = { crypto: globalThis.crypto };
     return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
 
-  // Apply only on a progress edit. Explicit actuals and their ordering take precedence.
-  function recordProgressActuals(
+  /** Mark work done on the day, or the local minute for clock work, it reaches 100 %.
+   * Finish (an activity's end, a milestone's moment) becomes now in the plan's time
+   * zone; a later Start moves with it. Undated work and incoming milestones keep
+   * their dates. Return whether a date changed. */
+  function recordCompletion(
     project,
     item,
     previousProgress,
-    { now = Date.now(), timeZone = project.manifest.timeZone, explicit = {} } = {},
+    { now = Date.now(), timeZone = project?.manifest?.timeZone } = {},
   ) {
-    if (!project.manifest.baseline || item.type === 'period') return false;
-    const start =
-      !item.type &&
-      previousProgress === 0 &&
-      item.progress > 0 &&
-      item.actualStart === undefined &&
-      !Object.hasOwn(explicit, 'actualStart');
-    const finish =
-      previousProgress !== 100 &&
-      item.progress === 100 &&
-      item.actualFinish === undefined &&
-      !Object.hasOwn(explicit, 'actualFinish');
-    if (!start && !finish) return false;
+    if (!item || item.type === 'period' || item.source) return false;
+    if (Number(previousProgress) === 100 || Number(item.progress) !== 100) return false;
+    const due = scheduledFinish(item);
+    if (due === undefined) return false;
     const minute = localFollowUpMinute(now, timeZone);
-    const value = isClock(scheduledFinish(item)) ? minute : minute.slice(0, 10);
-    let recorded = false;
-    if (start && !(timeOf(value) >= timeAfter(item.actualFinish))) {
-      item.actualStart = value;
-      recorded = true;
+    const value = isClock(due) ? minute : minute.slice(0, 10);
+    if (item.type === 'milestone') {
+      if (item.start === value) return false;
+      item.start = value;
+      return true;
     }
-    if (finish && !(timeOf(item.actualStart) >= timeAfter(value))) {
-      item.actualFinish = value;
-      recorded = true;
-    }
-    return recorded;
+    // An activity's dates share one precision.
+    const start = timeOf(item.start) > timeOf(value) ? value : item.start;
+    if (item.end === value && item.start === start) return false;
+    Object.assign(item, { start, end: value });
+    return true;
   }
 
   // Only two clock values imply a minute comparison. A day value carries
@@ -414,24 +385,6 @@ const scope = { crypto: globalThis.crypto };
     return validEstimatedCost(amount) ? amount : null;
   };
 
-  /** Forecast final activity cost from completion, current estimate and recorded actuals. */
-  function forecastCost(item, baseline) {
-    const current = trackingCost(item, 'estimatedCostMinor');
-    const actual = trackingCost(item, 'actualCostMinor');
-    const forecastMinor =
-      Number(item?.progress) === 100 && actual !== null
-        ? actual
-        : current === null && actual === null
-          ? null
-          : Math.max(current ?? 0, actual ?? 0);
-    const budget = trackingCost(baseline, 'estimatedCostMinor');
-    return {
-      forecastMinor,
-      forecastVarianceMinor:
-        forecastMinor === null || budget === null ? null : forecastMinor - budget,
-    };
-  }
-
   function trackingVariance(baseline, start, finish, cost, calendar) {
     const budget = trackingCost(baseline, 'estimatedCostMinor');
     return {
@@ -452,12 +405,15 @@ const scope = { crypto: globalThis.crypto };
     return { totalMinor: known ? totalMinor : null, known, eligible: amounts.length };
   }
 
+  // Work-day plans count variances in the current plan's working days.
+  const trackingCalendar = (project) =>
+    project?.manifest?.schedule === 'work-days'
+      ? workCalendar(project.items.filter((item) => kindOf(item) === 'period'))
+      : null;
+
   /** Compare baseline and live records in the same plan currency by stable ID. */
   function compareBaseline(baselineItems, currentItems, project) {
-    const calendar =
-      project?.manifest?.schedule === 'work-days'
-        ? workCalendar(project.items.filter((item) => kindOf(item) === 'period'))
-        : null;
+    const calendar = trackingCalendar(project);
     const trackedById = (items) =>
       new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
     const baselineById = trackedById(baselineItems);
@@ -465,19 +421,13 @@ const scope = { crypto: globalThis.crypto };
     const amounts = {
       baseline: [],
       current: [],
-      actual: [],
-      forecast: [],
       vsCurrent: [],
-      vsActual: [],
-      vsForecast: [],
     };
     const rows = [];
     for (const id of new Set([...currentById.keys(), ...baselineById.keys()])) {
       const baseline = baselineById.get(id);
       const current = currentById.get(id);
       const currentCost = trackingCost(current, 'estimatedCostMinor');
-      const actualCost = trackingCost(current, 'actualCostMinor');
-      const forecast = forecastCost(current, baseline);
       const vsCurrent = trackingVariance(
         baseline,
         activityField(current, 'start'),
@@ -485,39 +435,124 @@ const scope = { crypto: globalThis.crypto };
         currentCost,
         calendar,
       );
-      const vsActual = trackingVariance(
-        baseline,
-        activityField(current, 'actualStart'),
-        current?.actualFinish,
-        actualCost,
-        calendar,
-      );
-      rows.push({
-        id,
-        scope: !baseline ? 'added' : !current ? 'removed' : 'retained',
-        vsCurrent,
-        vsActual,
-      });
+      rows.push({ id, scope: !baseline ? 'added' : !current ? 'removed' : 'retained', vsCurrent });
 
       const baselineCanCarryCost = baseline && kindOf(baseline) === 'activity';
       const currentCanCarryCost = current && kindOf(current) === 'activity';
       if (baselineCanCarryCost) amounts.baseline.push(trackingCost(baseline, 'estimatedCostMinor'));
       if (currentCanCarryCost) {
         amounts.current.push(currentCost);
-        amounts.actual.push(actualCost);
-        amounts.forecast.push(forecast.forecastMinor);
       }
-      if (baselineCanCarryCost && currentCanCarryCost) {
-        amounts.vsCurrent.push(vsCurrent.costMinor);
-        amounts.vsActual.push(vsActual.costMinor);
-        amounts.vsForecast.push(forecast.forecastVarianceMinor);
-      }
+      if (baselineCanCarryCost && currentCanCarryCost) amounts.vsCurrent.push(vsCurrent.costMinor);
     }
     return {
       rows,
       cost: Object.fromEntries(
         Object.entries(amounts).map(([key, values]) => [key, summarizeTrackingCosts(values)]),
       ),
+    };
+  }
+
+  // The earliest start and latest finish of records, and their budget or estimate.
+  function trackingSpan(records) {
+    let start, finish;
+    const amounts = [];
+    for (const record of records) {
+      const from = record.start;
+      const to = scheduledFinish(record);
+      if (from !== undefined && (start === undefined || timeOf(from) < timeOf(start))) start = from;
+      if (to !== undefined && (finish === undefined || timeAfter(to) > timeAfter(finish)))
+        finish = to;
+      if (kindOf(record) === 'activity') amounts.push(trackingCost(record, 'estimatedCostMinor'));
+    }
+    return { start, finish, cost: summarizeTrackingCosts(amounts) };
+  }
+
+  function compareSpans(baselineRows, currentRecords, calendar) {
+    const baseline = trackingSpan(baselineRows);
+    const current = trackingSpan(currentRecords);
+    const { totalMinor: budget } = baseline.cost;
+    const { totalMinor: estimate } = current.cost;
+    return {
+      baseline,
+      current,
+      variance: {
+        start: scheduleVariance(baseline.start, current.start, calendar),
+        finish: scheduleVariance(baseline.finish, current.finish, calendar),
+        costMinor: budget === null || estimate === null ? null : estimate - budget,
+      },
+    };
+  }
+
+  /**
+   * Baseline and current totals of a plan and of each group of a dimension.
+   * `records` are the live activities and milestones shown; a baseline row
+   * counts when its live record is shown, and a row whose record was removed
+   * counts when `shown(row)` accepts it. The baseline side groups a row by
+   * its captured `values`; a row without captured status, saved before
+   * baselines held it or imported, follows its live record and is otherwise
+   * in no group. The current side groups live records. `groupOf` groups by
+   * something other than a dimension, such as the assignee: rows then follow
+   * their live records. Each side has its earliest start, latest finish and
+   * budget or estimate with coverage; the variances compare the totals.
+   * A group named by a value no longer in the dimension is `removed`.
+   */
+  function compareBaselineGroups(
+    project,
+    {
+      baseline = project.manifest.baseline,
+      groupBy = '',
+      records = project.items,
+      shown = () => true,
+      groupOf,
+    } = {},
+  ) {
+    const calendar = trackingCalendar(project);
+    const tracked = (list) => list.filter((record) => kindOf(record) !== 'period');
+    const live = new Map(tracked(project.items).map((record) => [record.id, record]));
+    const visible = new Map(tracked(records).map((record) => [record.id, record]));
+    const rows = (baseline?.items ?? []).filter((row) =>
+      live.has(row.id) ? visible.has(row.id) : shown(row),
+    );
+    const total = compareSpans(rows, [...visible.values()], calendar);
+    if (!groupBy) return { total, groups: [] };
+    const valueOf = groupOf ?? ((record) => record.values?.[groupBy] || '');
+    const groups = new Map();
+    const add = (key, side, record) => {
+      if (key === null) return;
+      if (!groups.has(key)) groups.set(key, { baseline: [], current: [] });
+      groups.get(key)[side].push(record);
+    };
+    for (const row of rows) {
+      const record = visible.get(row.id);
+      add(
+        !groupOf && row.progress !== undefined
+          ? row.values?.[groupBy] || ''
+          : record
+            ? valueOf(record)
+            : null,
+        'baseline',
+        row,
+      );
+    }
+    for (const record of visible.values()) add(valueOf(record), 'current', record);
+    const dimension = groupOf
+      ? null
+      : (project.manifest.dimensions ?? []).find(({ id }) => id === groupBy);
+    const options = (dimension?.options ?? []).map(({ id }) => id);
+    const rank = (key) => {
+      const index = options.indexOf(key);
+      return index >= 0 ? index : key === '' ? options.length : options.length + 1;
+    };
+    return {
+      total,
+      groups: [...groups]
+        .sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+        .map(([id, sides]) => ({
+          id,
+          removed: !groupOf && id !== '' && !options.includes(id),
+          ...compareSpans(sides.baseline, sides.current, calendar),
+        })),
     };
   }
 
@@ -857,8 +892,13 @@ const scope = { crypto: globalThis.crypto };
     return value;
   }
 
+  // A plan keeps at most this many baselines, the active one included.
+  const MAX_BASELINES = 20;
+  const MAX_BASELINE_NAME = 100;
+
   function baselineItem(item) {
-    const { id, type, start, end, estimatedCostMinor, title, ref } = item;
+    const { id, type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
+    const captured = values && Object.keys(values).sort();
     return {
       id,
       ...(type === 'milestone' ? { type } : {}),
@@ -867,6 +907,10 @@ const scope = { crypto: globalThis.crypto };
       ...(start === undefined ? {} : { start }),
       ...(end === undefined ? {} : { end }),
       ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
+      ...(progress === undefined ? {} : { progress }),
+      ...(captured?.length
+        ? { values: Object.fromEntries(captured.map((key) => [key, values[key]])) }
+        : {}),
     };
   }
 
@@ -877,32 +921,71 @@ const scope = { crypto: globalThis.crypto };
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
-  function normalizeBaseline(value) {
-    const path = 'manifest.baseline';
-    const source = requireRecord(value, path);
+  /* A snapshot saved without an ID, by an earlier version or a command that
+     names none, is identified by its plan and capture second, so every
+     client derives the same ID for it. */
+  function derivedBaselineId(projectId, capturedAt) {
+    const plan = projectId.replace(/-/g, '').toLowerCase();
+    const seconds = Math.floor(Date.parse(capturedAt) / 1000)
+      .toString(16)
+      .padStart(12, '0')
+      .slice(-12);
+    const hex = seconds + '8' + plan.slice(13, 16) + '8' + plan.slice(17);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  /** The name a baseline gets when none is given: its UTC capture date. */
+  const defaultBaselineName = (capturedAt) => capturedAt.slice(0, 10);
+
+  // A newer snapshot sorts later; equal capture times go by ID.
+  const baselineOrder = (a, b) =>
+    a.capturedAt < b.capturedAt
+      ? -1
+      : a.capturedAt > b.capturedAt
+        ? 1
+        : a.id < b.id
+          ? -1
+          : a.id > b.id
+            ? 1
+            : 0;
+
+  function normalizeSnapshot(source, path, projectId, nested) {
     const { capturedAt, costCurrency } = source;
-    exactKeys(
-      source,
-      ['capturedAt', 'items', ...(costCurrency === undefined ? [] : ['costCurrency'])],
-      path,
-    );
+    const allowed = [
+      'id',
+      'name',
+      'capturedAt',
+      'costCurrency',
+      'items',
+      ...(nested ? [] : ['earlier']),
+    ];
+    if (Object.keys(source).some((key) => !allowed.includes(key)))
+      invalid(path, 'contains unsupported fields');
     utcTimestamp(capturedAt, path + '.capturedAt');
+    const id =
+      source.id === undefined
+        ? derivedBaselineId(projectId, capturedAt)
+        : uuidValue(source.id, path + '.id');
+    const name =
+      source.name === undefined
+        ? defaultBaselineName(capturedAt)
+        : stringValue(source.name, path + '.name', MAX_BASELINE_NAME, true);
     if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
       invalid(path + '.costCurrency', 'expected a supported currency');
     const ids = makeIdRegistry();
     const items = requireArray(source.items, path + '.items', MAX_ITEMS).map((record, index) => {
       const where = path + '.items[' + index + ']';
       const item = requireRecord(record, where);
-      const { type, start, end, estimatedCostMinor, title, ref } = item;
+      const { type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
       if (type !== undefined && type !== 'milestone')
         invalid(where + '.type', 'must be a milestone or omitted for an activity');
       const fields =
         type === 'milestone'
-          ? ['id', 'type', 'start', 'title', 'ref']
-          : ['id', 'start', 'end', 'estimatedCostMinor', 'title', 'ref'];
+          ? ['id', 'type', 'start', 'title', 'ref', 'progress', 'values']
+          : ['id', 'start', 'end', 'estimatedCostMinor', 'title', 'ref', 'progress', 'values'];
       if (Object.keys(item).some((key) => !fields.includes(key)))
         invalid(where, 'contains unsupported fields');
-      const id = ids.add(item.id, where + '.id');
+      const rowId = ids.add(item.id, where + '.id');
       if (title !== undefined) stringValue(title, where + '.title', 180, false);
       refValue(ref, where + '.ref');
       if (start !== undefined) scaleValue(start, where + '.start');
@@ -922,26 +1005,105 @@ const scope = { crypto: globalThis.crypto };
           where + '.estimatedCostMinor',
           'expected a supported currency and amount in minor units',
         );
-      return baselineItem({ ...item, id });
+      if (
+        progress !== undefined &&
+        !(type === 'milestone' ? [0, 100] : [...PROGRESS_VALUES]).includes(progress)
+      )
+        invalid(where + '.progress', 'expected the progress the record could hold');
+      // Captured values may name dimensions and options removed since.
+      if (values !== undefined) {
+        requireRecord(values, where + '.values');
+        if (Object.keys(values).length > MAX_DIMENSIONS)
+          invalid(where + '.values', `at most ${MAX_DIMENSIONS} entries`);
+        for (const [dimensionId, optionId] of Object.entries(values)) {
+          uuidValue(dimensionId, where + '.values');
+          if (optionId !== '') uuidValue(optionId, `${where}.values.${dimensionId}`);
+        }
+      }
+      return baselineItem({ ...item, id: rowId });
     });
-    return { capturedAt, ...(costCurrency ? { costCurrency } : {}), items: baselineItems(items) };
-  }
-
-  function captureBaseline(project, capturedAt) {
-    const { costCurrency } = project.manifest;
     return {
-      capturedAt: utcTimestamp(capturedAt, 'capturedAt'),
+      id,
+      name,
+      capturedAt,
       ...(costCurrency ? { costCurrency } : {}),
-      items: baselineItems(project.items),
+      items: baselineItems(items),
     };
   }
 
+  /** The active snapshot followed by the earlier ones, oldest first. */
+  function baselineEntries(baseline) {
+    if (!baseline) return [];
+    const { earlier = [], ...active } = baseline;
+    return [active, ...earlier];
+  }
+
+  /** The canonical `manifest.baseline` for snapshots and the active ID. */
+  function baselineCollection(entries, activeId) {
+    const active = entries.find((entry) => entry.id === activeId);
+    if (!active) return undefined;
+    const earlier = entries.filter((entry) => entry.id !== activeId).sort(baselineOrder);
+    return { ...active, ...(earlier.length ? { earlier } : {}) };
+  }
+
+  /** The baseline that becomes active when the active one is removed: the newest. */
+  function latestBaseline(entries) {
+    return entries.slice().sort(baselineOrder).at(-1);
+  }
+
+  function normalizeBaseline(value, projectId) {
+    const path = 'manifest.baseline';
+    const source = requireRecord(value, path);
+    const active = normalizeSnapshot(source, path, projectId, false);
+    const earlier =
+      source.earlier === undefined
+        ? []
+        : requireArray(source.earlier, path + '.earlier', MAX_BASELINES - 1).map((entry, index) =>
+            normalizeSnapshot(
+              requireRecord(entry, `${path}.earlier[${index}]`),
+              `${path}.earlier[${index}]`,
+              projectId,
+              true,
+            ),
+          );
+    const entries = [active, ...earlier];
+    const ids = new Set();
+    entries.forEach((entry, index) => {
+      if (ids.has(entry.id))
+        invalid(index ? `${path}.earlier[${index - 1}].id` : `${path}.id`, 'duplicate ID');
+      ids.add(entry.id);
+    });
+    return baselineCollection(entries, active.id);
+  }
+
+  /** A snapshot of every activity and milestone, with their status at capture. */
+  function captureBaseline(project, capturedAt, { id, name } = {}) {
+    const { costCurrency, projectId } = project.manifest;
+    utcTimestamp(capturedAt, 'capturedAt');
+    return {
+      id: id === undefined ? derivedBaselineId(projectId, capturedAt) : uuidValue(id, 'id'),
+      name:
+        name === undefined
+          ? defaultBaselineName(capturedAt)
+          : stringValue(name, 'name', MAX_BASELINE_NAME, true),
+      capturedAt,
+      ...(costCurrency ? { costCurrency } : {}),
+      items: baselineItems(
+        project.items.map((item) => ({
+          ...item,
+          progress: item.progress ?? 0,
+          values: item.values ?? {},
+        })),
+      ),
+    };
+  }
+
+  // Every snapshot's budgets count, so the currency cannot relabel any of them.
   const hasPlanCosts = (project) =>
-    project.items.some(
-      (item) => item.estimatedCostMinor !== undefined || item.actualCostMinor !== undefined,
-    ) ||
-    (project.manifest.baseline?.items.some((item) => item.estimatedCostMinor !== undefined) ??
-      false);
+    project.items.some((item) => item.estimatedCostMinor !== undefined) ||
+    baselineEntries(project.manifest.baseline).some((entry) =>
+      entry.items.some((item) => item.estimatedCostMinor !== undefined),
+    );
 
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
@@ -965,10 +1127,14 @@ const scope = { crypto: globalThis.crypto };
     const shareLinkCreatedAt = source.shareLinkCreatedAt;
     if (shareLinkCreatedAt !== undefined)
       utcTimestamp(shareLinkCreatedAt, 'manifest.shareLinkCreatedAt');
-    const baseline = source.baseline === undefined ? undefined : normalizeBaseline(source.baseline);
+    const baseline =
+      source.baseline === undefined ? undefined : normalizeBaseline(source.baseline, projectId);
     if (
-      baseline?.items.some((item) => item.estimatedCostMinor !== undefined) &&
-      baseline.costCurrency !== costCurrency
+      baselineEntries(baseline).some(
+        (entry) =>
+          entry.items.some((item) => item.estimatedCostMinor !== undefined) &&
+          entry.costCurrency !== costCurrency,
+      )
     )
       invalid('manifest.costCurrency', 'must match the baseline budget currency');
     const dimensions = normalizeDimensions(source.dimensions, registry);
@@ -1220,13 +1386,6 @@ const scope = { crypto: globalThis.crypto };
   function convertRecord(record, type) {
     const from = kindOf(record);
     if (
-      type !== 'activity' &&
-      (record.actualStart !== undefined ||
-        record.actualCostMinor !== undefined ||
-        (type === 'period' && record.actualFinish !== undefined))
-    )
-      throw new TypeError('Clear actuals that the new record kind cannot hold');
-    if (
       from === type ||
       !RECORD_KINDS.includes(type) ||
       record.source ||
@@ -1252,7 +1411,6 @@ const scope = { crypto: globalThis.crypto };
     const common = {
       ...own,
       dependsOn: [...(record.dependsOn || [])],
-      ...(record.actualFinish === undefined ? {} : { actualFinish: record.actualFinish }),
       ...(record.assignee ? { assignee: record.assignee } : {}),
     };
     if (from === 'period') return { ...common, progress: 0, start: record.start, end: record.end };
@@ -1292,43 +1450,9 @@ const scope = { crypto: globalThis.crypto };
   // Fields a record of one type must leave out.
   const FOREIGN_FIELDS = Object.freeze({
     activity: Object.freeze(['fixed', 'source']),
-    milestone: Object.freeze([
-      'end',
-      'startAfter',
-      'estimatedCostMinor',
-      'actualStart',
-      'actualCostMinor',
-    ]),
-    period: Object.freeze([
-      'progress',
-      'startAfter',
-      'assignee',
-      'fixed',
-      'estimatedCostMinor',
-      'actualStart',
-      'actualFinish',
-      'actualCostMinor',
-    ]),
+    milestone: Object.freeze(['end', 'startAfter', 'estimatedCostMinor']),
+    period: Object.freeze(['progress', 'startAfter', 'assignee', 'fixed', 'estimatedCostMinor']),
   });
-
-  function normalizeActuals(source, path) {
-    const { actualStart, actualFinish, actualCostMinor } = source;
-    if (actualStart !== undefined) scaleValue(actualStart, path + '.actualStart');
-    if (actualFinish !== undefined) scaleValue(actualFinish, path + '.actualFinish');
-    if (
-      actualStart !== undefined &&
-      actualFinish !== undefined &&
-      timeOf(actualStart) >= timeAfter(actualFinish)
-    )
-      invalid(path + '.actualFinish', 'must not be before actual start');
-    if (actualCostMinor !== undefined && !validEstimatedCost(actualCostMinor))
-      invalid(path + '.actualCostMinor', 'expected a non-negative amount in minor units');
-    return {
-      ...(actualStart === undefined ? {} : { actualStart }),
-      ...(actualFinish === undefined ? {} : { actualFinish }),
-      ...(actualCostMinor === undefined ? {} : { actualCostMinor }),
-    };
-  }
 
   function normalizeActivity(source, path, base) {
     const progress = source.progress === undefined ? 0 : source.progress;
@@ -1354,7 +1478,6 @@ const scope = { crypto: globalThis.crypto };
       description: base.description,
       progress,
       ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
-      ...normalizeActuals(source, path),
       ...(dated ? { start, end } : {}),
       values: base.values,
       dependsOn: base.dependsOn,
@@ -1384,7 +1507,6 @@ const scope = { crypto: globalThis.crypto };
       id: base.id,
       projectId: base.projectId,
       type: 'milestone',
-      ...normalizeActuals(source, path),
       title: base.title,
       description: base.description,
       progress,
@@ -1494,18 +1616,76 @@ const scope = { crypto: globalThis.crypto };
     return result;
   }
 
+  /**
+   * One view filter as `{ values, exclude }`, or null when it filters
+   * nothing. A filter is stored as one option ID, `""` for none, or
+   * `{ values: [option IDs], exclude: true }` for several values or for all
+   * values but these.
+   */
+  function filterSelection(value) {
+    if (typeof value === 'string') return value ? { values: [value], exclude: false } : null;
+    if (!isRecord(value) || !Array.isArray(value.values)) return null;
+    const values = [...new Set(value.values.filter((id) => typeof id === 'string' && id))];
+    return values.length ? { values, exclude: value.exclude === true } : null;
+  }
+
+  /** The stored form of a filter selection: one included value as its ID. */
+  function filterValue({ values = [], exclude = false } = {}) {
+    if (!values.length) return '';
+    if (!exclude && values.length === 1) return values[0];
+    return exclude ? { values: [...values], exclude: true } : { values: [...values] };
+  }
+
+  /**
+   * Filters of the given dimensions in stored form, each value in its
+   * dimension's order: entries of a missing dimension and values it no
+   * longer holds are dropped, and so is an entry left with no value.
+   */
+  function pruneFilters(filters, dimensions = []) {
+    const result = {};
+    if (!isRecord(filters)) return result;
+    const byId = new Map(
+      [...dimensions, PROGRESS_FILTER].map((dimension) => [dimension.id, dimension]),
+    );
+    for (const [dimensionId, stored] of Object.entries(filters)) {
+      const dimension = byId.get(dimensionId);
+      if (!dimension) continue;
+      const selection = filterSelection(stored);
+      if (!selection) {
+        if (stored === '') result[dimensionId] = '';
+        continue;
+      }
+      const values = dimension.options
+        .map((option) => option.id)
+        .filter((id) => selection.values.includes(id));
+      if (values.length) result[dimensionId] = filterValue({ ...selection, values });
+    }
+    return result;
+  }
+
   function normalizeFilters(value, context, path) {
     if (value === undefined || value === null) return {};
     if (!isRecord(value)) invalid(path, 'expected an object');
-    const filters = {};
-    if (!context.optionByDimension) return filters;
-    for (const [dimensionId, optionId] of Object.entries(value)) {
-      const options = context.optionByDimension.get(dimensionId);
-      if (!options) continue;
-      if (optionId !== '' && !options.has(optionId)) continue;
-      filters[dimensionId] = optionId;
+    if (!context.optionByDimension) return {};
+    for (const [dimensionId, stored] of Object.entries(value)) {
+      if (!isRecord(stored)) continue;
+      const where = `${path}.${dimensionId}`;
+      if (!Array.isArray(stored.values)) invalid(`${where}.values`, 'expected an array');
+      if (Object.keys(stored).some((key) => key !== 'values' && key !== 'exclude'))
+        invalid(where, 'only values and exclude are allowed');
+      if (stored.exclude !== undefined && typeof stored.exclude !== 'boolean')
+        invalid(`${where}.exclude`, 'expected a boolean');
+      if (stored.values.length > 100) invalid(`${where}.values`, 'at most 100 values');
+      if (stored.values.some((id) => typeof id !== 'string'))
+        invalid(`${where}.values`, 'expected option IDs');
     }
-    return filters;
+    return pruneFilters(
+      value,
+      [...context.optionByDimension].map(([id, options]) => ({
+        id,
+        options: [...options].map((option) => ({ id: option })),
+      })),
+    );
   }
 
   function normalizeColumns(value, fallback, validKeys, path) {
@@ -1524,54 +1704,44 @@ const scope = { crypto: globalThis.crypto };
   const SCHEDULE_TRACKING_COLUMNS = Object.freeze([
     'baselineStart',
     'currentStart',
-    'actualStart',
     'currentStartVariance',
-    'actualStartVariance',
     'baselineFinish',
     'currentFinish',
-    'actualFinish',
     'currentFinishVariance',
-    'actualFinishVariance',
   ]);
   const COST_TRACKING_COLUMNS = Object.freeze([
     'budgetMinor',
     'currentEstimateMinor',
-    'actualCostMinor',
     'currentCostVarianceMinor',
-    'actualCostVarianceMinor',
-    'forecastMinor',
-    'forecastVarianceMinor',
   ]);
   const TRACKING_LIST_COLUMNS = Object.freeze([
     ...SCHEDULE_TRACKING_COLUMNS,
     ...COST_TRACKING_COLUMNS,
   ]);
+  function hasTrackingList(project) {
+    return project.sharedViews.some(
+      (view) =>
+        view.view === 'list' && view.listColumns.some((key) => TRACKING_LIST_COLUMNS.includes(key)),
+    );
+  }
+
   // A public List may keep the underlying values needed by visible variances.
   const SCREEN_TRACKING_COLUMNS = Object.freeze({
     baselineStart: ['baselineDates'],
     currentStart: [],
-    actualStart: ['actualStart'],
     currentStartVariance: ['baselineDates'],
-    actualStartVariance: ['baselineDates', 'actualStart'],
     baselineFinish: ['baselineDates'],
     currentFinish: [],
-    actualFinish: ['actualFinish'],
     currentFinishVariance: ['baselineDates'],
-    actualFinishVariance: ['baselineDates', 'actualFinish'],
     budgetMinor: ['baselineCost'],
     currentEstimateMinor: [],
-    actualCostMinor: ['actualCostMinor'],
     currentCostVarianceMinor: ['baselineCost'],
-    actualCostVarianceMinor: ['baselineCost', 'actualCostMinor'],
-    forecastMinor: ['actualCostMinor'],
-    forecastVarianceMinor: ['baselineCost', 'actualCostMinor'],
   });
   const screenTrackingFields = (view) =>
     view?.view === 'timeline'
-      ? [
-          ...(view.timelineShowBaseline ? ['baselineDates'] : []),
-          ...(view.timelineShowActuals ? ['actualStart', 'actualFinish'] : []),
-        ]
+      ? view.timelineShowBaseline
+        ? ['baselineDates']
+        : []
       : view?.view === 'list'
         ? Array.from(
             new Set((view.listColumns || []).flatMap((key) => SCREEN_TRACKING_COLUMNS[key] || [])),
@@ -1738,9 +1908,6 @@ const scope = { crypto: globalThis.crypto };
         ...(booleanValue(source.timelineShowBaseline, `${path}.timelineShowBaseline`, false)
           ? { timelineShowBaseline: true }
           : {}),
-        ...(booleanValue(source.timelineShowActuals, `${path}.timelineShowActuals`, false)
-          ? { timelineShowActuals: true }
-          : {}),
         textMode,
         filters: normalizeFilters(source.filters, context, `${path}.filters`),
         query:
@@ -1770,6 +1937,9 @@ const scope = { crypto: globalThis.crypto };
         flowHideDates: booleanValue(source.flowHideDates, `${path}.flowHideDates`, false),
         showAssignee: booleanValue(source.showAssignee, `${path}.showAssignee`, true),
         showRefs: booleanValue(source.showRefs, `${path}.showRefs`, false),
+        ...(booleanValue(source.showCostSummary, `${path}.showCostSummary`, false)
+          ? { showCostSummary: true }
+          : {}),
         timelineActivityRows,
         timelineMilestoneMode,
         timelineMilestonesBesideWork: booleanValue(
@@ -1947,17 +2117,16 @@ const scope = { crypto: globalThis.crypto };
     const registry = makeIdRegistry();
     const manifest = normalizeManifest(source.manifest, registry);
     const items = normalizeItems(source.items, manifest, registry);
-    if (
-      !manifest.costCurrency &&
-      items.some(
-        (item) => item.estimatedCostMinor !== undefined || item.actualCostMinor !== undefined,
-      )
-    )
+    if (!manifest.costCurrency && items.some((item) => item.estimatedCostMinor !== undefined))
       invalid('manifest.costCurrency', 'required when an activity has a cost');
     const sharedViews = normalizeViews(source.sharedViews, manifest, registry);
     if (manifest.baseline) {
       const liveIds = new Set(items.map((item) => item.id));
-      if (manifest.baseline.items.some(({ id }) => registry.has(id) && !liveIds.has(id)))
+      if (
+        baselineEntries(manifest.baseline).some((entry) =>
+          entry.items.some(({ id }) => registry.has(id) && !liveIds.has(id)),
+        )
+      )
         invalid(
           'manifest.baseline.items',
           'a historical work ID cannot name other project metadata',
@@ -1988,20 +2157,32 @@ const scope = { crypto: globalThis.crypto };
   }
 
   /**
-   * Whether a view shows an activity: every set filter matches and the
+   * Whether a view shows an activity: every set filter matches, by one of
+   * its values or by none of an exclusion's (a record without a value of
+   * the dimension passes only an exclusion; a progress filter reads a
+   * record without progress as 0), and the
    * search finds its text in the activity's reference key, title,
    * description or dimension values. The editor, screens and
    * screen-link snapshots share this test.
    */
   function activityMatcher({ filters = {}, query = '' } = {}, dimensions = [], locale) {
-    const set = Object.entries(filters || {}).filter(([, option]) => option);
+    const set = Object.entries(filters || {})
+      .map(([dimension, stored]) => [dimension, filterSelection(stored)])
+      .filter(([, selection]) => selection);
     const search = String(query || '').toLocaleLowerCase(locale);
     const names = dimensions.map((dimension) => [
       dimension.id,
       new Map(dimension.options.map((choice) => [choice.id, choice.name])),
     ]);
     return (item) =>
-      set.every(([dimension, option]) => item.values?.[dimension] === option) &&
+      set.every(
+        ([dimension, { values, exclude }]) =>
+          values.includes(
+            dimension === PROGRESS_AXIS
+              ? String(item.progress ?? 0)
+              : item.values?.[dimension] || '',
+          ) !== exclude,
+      ) &&
       (!search ||
         (
           (item.ref ? `${item.ref} ` : '') +
@@ -2081,10 +2262,24 @@ const scope = { crypto: globalThis.crypto };
     return matches[0];
   }
 
-  /** A calendar copy retains live actuals and omits the baseline snapshot. */
+  function stripTracking(project, views) {
+    delete project.manifest.baseline;
+    const trackingColumns = new Set(TRACKING_LIST_COLUMNS);
+    for (const view of views) {
+      if (!view) continue;
+      delete view.timelineShowBaseline;
+      for (const key of ['listColumns', 'listColumnOrder'])
+        if (Array.isArray(view[key]))
+          view[key] = view[key].filter((column) => !trackingColumns.has(column));
+      if (trackingColumns.has(view.listSort)) view.listSort = '';
+    }
+  }
+
+  /** Project a hosted or file plan onto the fields supported by calendar storage. */
   function copyForCalendar(project) {
     const copy = withoutPlanLinks(project);
-    delete copy.manifest.baseline;
+    stripTracking(copy, copy.sharedViews);
+    for (const view of copy.sharedViews) if (view.color === FOLLOW_UP_COLOR) view.color = '';
     return copy;
   }
 
@@ -2251,6 +2446,97 @@ const scope = { crypto: globalThis.crypto };
     return JSON.stringify(sanitized === OMIT ? null : sanitized);
   }
 
+  /*
+   * The saved views a new project starts with. Classic is the familiar Gantt
+   * layout of one activity per row under a fixed label, a collapsible summary
+   * for each option of the first dimension, arrows sharing trunks, milestone
+   * flags beside the work they end and the today line, over `range` or the
+   * project's year. Overview is a board of the first dimension by progress.
+   * Both are ordinary shared views a team may change, rename or delete.
+   */
+  function classicView(manifest, name, range = null) {
+    const { dimensions, year } = manifest;
+    const group = dimensions[0]?.id || '';
+    const columns = ['title', 'start', 'end', ...dimensions.map((dimension) => dimension.id)];
+    return {
+      id: uuid(),
+      ...(manifest.projectId ? { projectId: manifest.projectId } : {}),
+      name,
+      view: 'timeline',
+      row: '',
+      col: '',
+      color: '',
+      colorOverrides: {},
+      group,
+      resolution: 'month',
+      timelineShowToday: true,
+      textMode: 'hide',
+      filters: {},
+      query: '',
+      hideEmptyRows: false,
+      hideEmptyColumns: false,
+      hideEmptyTimelineGroups: true,
+      hideUnconnectedActivities: false,
+      flowGroupMilestones: false,
+      hideEmptyFlowGroups: false,
+      flowHideDates: false,
+      timelineActivityRows: 'single-label',
+      timelineMilestoneMode: 'flag',
+      timelineMilestonesBesideWork: true,
+      showRefs: true,
+      timelineSummarizeBy: group,
+      timelineWeekDays: 'work',
+      timelineDependencyArrows: 'grouped',
+      flowDirection: 'auto',
+      flowArrows: 'curved',
+      flowShapes: 'capsules',
+      flowGroup: '',
+      timelineStart: range?.start || `${year}-01-01`,
+      timelineEnd: range?.end || `${year}-12-31`,
+      listColumns: columns.slice(),
+      listColumnOrder: columns.slice(),
+    };
+  }
+
+  function overviewView(manifest, name, colorBy = manifest.dimensions[0]?.id || '') {
+    const { dimensions, year } = manifest;
+    const columns = ['title', 'start', 'end', ...dimensions.map((dimension) => dimension.id)];
+    return {
+      id: uuid(),
+      ...(manifest.projectId ? { projectId: manifest.projectId } : {}),
+      name,
+      view: 'grid',
+      row: dimensions[0]?.id || '',
+      col: 'progress',
+      color: colorBy,
+      colorOverrides: {},
+      group: dimensions[0]?.id || '',
+      resolution: 'month',
+      textMode: 'beside',
+      filters: {},
+      query: '',
+      hideEmptyRows: false,
+      hideEmptyColumns: false,
+      hideEmptyTimelineGroups: true,
+      hideUnconnectedActivities: false,
+      flowGroupMilestones: false,
+      hideEmptyFlowGroups: false,
+      flowHideDates: false,
+      timelineActivityRows: 'single',
+      timelineMilestoneMode: 'label',
+      timelineWeekDays: 'work',
+      timelineDependencyArrows: 'grouped',
+      flowDirection: 'auto',
+      flowArrows: 'curved',
+      flowShapes: 'capsules',
+      flowGroup: '',
+      timelineStart: `${year}-01-01`,
+      timelineEnd: `${year}-12-31`,
+      listColumns: columns.slice(),
+      listColumnOrder: columns.slice(),
+    };
+  }
+
   /** Decode and sanitize personal view state without applying project rules. */
   function deserializeViewState(value) {
     const parsed = parseJsonInput(value, 'viewState');
@@ -2260,16 +2546,26 @@ const scope = { crypto: globalThis.crypto };
 
   return {
     uuid,
+    classicView,
+    overviewView,
     maxViews: MAX_VIEWS,
     costCurrencies: COST_CURRENCIES,
     validEstimatedCost,
     captureBaseline,
+    baselineEntries,
+    baselineCollection,
+    latestBaseline,
+    derivedBaselineId,
+    defaultBaselineName,
+    maxBaselines: MAX_BASELINES,
+    maxBaselineName: MAX_BASELINE_NAME,
     hasPlanCosts,
     assigneeAxis: ASSIGNEE_AXIS,
     validAssignee,
     withoutAssignees,
     withoutPlanLinks,
     progressAxis: PROGRESS_AXIS,
+    progressFilter: PROGRESS_FILTER,
     followUpColor: FOLLOW_UP_COLOR,
     enumValues: ENUM_VALUES,
     renamedViewValues: RENAMED_VIEW_VALUES,
@@ -2288,7 +2584,7 @@ const scope = { crypto: globalThis.crypto };
     startThreshold,
     completionBlockers,
     completionDecision,
-    recordProgressActuals,
+    recordCompletion,
     timeScale,
     isClock,
     holdsLocalTimes,
@@ -2297,10 +2593,11 @@ const scope = { crypto: globalThis.crypto };
     timeAfter,
     followUpStatus,
     compareBaseline,
-    forecastCost,
+    compareBaselineGroups,
     scheduledFinish,
     timelineTracking,
     listColumnKeys: LIST_COLUMN_KEYS,
+    hasTrackingList,
     trackingListColumns: TRACKING_LIST_COLUMNS,
     screenTrackingColumns: SCREEN_TRACKING_COLUMNS,
     screenTrackingFields,
@@ -2315,6 +2612,9 @@ const scope = { crypto: globalThis.crypto };
     normalizeProject,
     copyAsNewProject,
     activityMatcher,
+    filterSelection,
+    filterValue,
+    pruneFilters,
     normalizeManifest,
     normalizeItems,
     normalizeViews,
@@ -2327,6 +2627,7 @@ const scope = { crypto: globalThis.crypto };
     serializeViews,
     deserializeViews,
     copyForCalendar,
+    stripTracking,
     serializeCalendarMetadata,
     deserializeCalendarMetadata,
     encodeFile,
@@ -3203,6 +3504,8 @@ const scope = { crypto: globalThis.crypto };
         }
         if (isRecord(view.filters))
           for (const [key, choice] of Object.entries(view.filters)) {
+            // Progress keeps its key; the strict reader checks its steps.
+            if (key === 'progress') continue;
             const index = /^\d+$/.test(key)
               ? Number(key)
               : dimensions.findIndex(([name]) => sameText(name, key));
@@ -3212,7 +3515,17 @@ const scope = { crypto: globalThis.crypto };
               continue;
             }
             if (String(index) !== key) note(where, `filter ${show(key)} became dimension ${index}`);
-            view.filters[index] = optionOf(dimensions[index], choice, where);
+            // Several values list option numbers; an exclusion negates them.
+            view.filters[index] = Array.isArray(choice)
+              ? choice
+                  .map((entry) =>
+                    Number.isInteger(entry) && entry < 0 && -entry <= dimensions[index][1].length
+                      ? entry
+                      : optionOf(dimensions[index], entry, where),
+                  )
+                  .filter(Boolean)
+              : optionOf(dimensions[index], choice, where);
+            if (Array.isArray(choice) && !view.filters[index].length) view.filters[index] = 0;
           }
         for (const field of ['timelineStart', 'timelineEnd'])
           if (Number.isInteger(view[field])) {
@@ -3405,7 +3718,7 @@ const scope = { crypto: globalThis.crypto };
       s: new Map(),
       p: new Map(),
       m: new Map(),
-      ...(tracking ? { b: new Map(), x: new Map() } : {}),
+      ...(tracking ? { b: new Map() } : {}),
     };
     let ended = false;
     let last = 't';
@@ -3609,15 +3922,7 @@ const scope = { crypto: globalThis.crypto };
           }),
         ];
       } else if (lists.b.size) failAt('b', 'the baseline rows need a capture record');
-      if (lists.x.size)
-        payload.x = ordered(lists.x, 'x').map(({ key, value }) => {
-          const fields = value.split('/');
-          if (fields.length !== 4)
-            return failAt(key, 'expected ID, actual start, actual finish and actual cost');
-          const [id, start, finish, cost] = fields;
-          return [reference(id, key, false), time(start), time(finish), amount(cost, key)];
-        });
-      if (!payload.b && !payload.x) failAt('t', 'version 2 needs baseline or actuals data');
+      if (!payload.b) failAt('t', 'version 2 needs baseline data');
     }
     // `@a1,a4,s2,a1:50`: predecessor indices and their start-after shares.
     const dependenciesOf = (list, where) => {
@@ -3740,8 +4045,8 @@ const scope = { crypto: globalThis.crypto };
           view.timelineShowBaseline = true;
           continue;
         }
-        if (tracking && payload.x && plain === 'actuals') {
-          view.timelineShowActuals = true;
+        if (plain === 'costs') {
+          view.showCostSummary = true;
           continue;
         }
         if (LAYOUTS[plain]) {
@@ -3770,7 +4075,7 @@ const scope = { crypto: globalThis.crypto };
         if (!field)
           note(
             'v',
-            `${JSON.stringify(axis)} is not classic, compact, a style, rows, columns, color, group, cost-group, start or end`,
+            `${JSON.stringify(axis)} is not classic, compact, costs, a style, rows, columns, color, group, cost-group, start or end`,
           );
         else if (field === 'color' && name === '@follow-up-status')
           view[field] = 'follow-up-status';
@@ -3891,7 +4196,7 @@ const scope = { crypto: globalThis.crypto };
         : index < items.length + milestones.length
           ? `s${index - items.length + 1}`
           : `p${index - items.length - milestones.length + 1}`;
-    const tracking = payload.b !== undefined || payload.x !== undefined;
+    const tracking = payload.b !== undefined;
     const records = [tracking ? 't=2' : 't=1', `n=${field(payload.n)}`];
     if (payload.d) records.push(`d=${field(payload.d)}`);
     records.push(`y=${year}`);
@@ -3972,22 +4277,18 @@ const scope = { crypto: globalThis.crypto };
         records.push(`b${index + 1}=${row.join('/')}`);
       }
     }
-    for (const [index, [id, start, finish, cost]] of (payload.x || []).entries())
-      records.push(
-        `x${index + 1}=${[keyOf(id), start ?? '-', finish ?? '-', cost ?? '-'].join('/')}`,
-      );
     if (payload.o) {
       const view = payload.o;
       const mode = { grid: 'board', timeline: 'timeline', list: 'list', flow: 'flow' }[
         view.view ?? 'grid'
       ];
       const settings = [mode];
+      if (view.showCostSummary) settings.push('costs');
       const layout = Object.keys(LAYOUTS).find(
         (word) => LAYOUTS[word] === view.timelineActivityRows,
       );
       if (layout) settings.push(layout);
       if (payload.b && view.timelineShowBaseline) settings.push('baseline');
-      if (payload.x && view.timelineShowActuals) settings.push('actuals');
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
       for (const [axis, key] of Object.entries(VIEW_AXES)) {
         if (key === 'color' && view[key] === 'follow-up-status')
@@ -4420,6 +4721,7 @@ const scope = { crypto: globalThis.crypto };
   function createFactory({ model, repairDates = null, lenient = null, readable = null }) {
     const listColumnKeys = new Set(model.listColumnKeys);
     /* Pack a normalized project into plain JSON values without IDs. */
+    const progressSteps = model.progressFilter.options.map((step) => step.id);
     const builtInColorOrAxis = (key, value) =>
       value === model.progressAxis || (key === 'color' && value === model.followUpColor);
 
@@ -4479,7 +4781,22 @@ const scope = { crypto: globalThis.crypto };
             packed[key] = dimensionIndex.has(value) ? dimensionIndex.get(value) : value;
           else if (key === 'filters')
             packed[key] = Object.fromEntries(
-              Object.entries(value).map(([id, choice]) => [dimensionIndex.get(id), option(choice)]),
+              Object.entries(value).map(([id, choice]) => {
+                // Several values are a list of option numbers; an exclusion
+                // lists them negated.
+                // Progress keeps its key and numbers its steps.
+                const stored = model.filterValue(model.filterSelection(choice) || {}),
+                  progress = id === model.progressAxis,
+                  number = (value) => (progress ? progressSteps.indexOf(value) + 1 : option(value));
+                return [
+                  progress ? id : dimensionIndex.get(id),
+                  typeof stored === 'string'
+                    ? number(stored)
+                    : stored.values.map((value) =>
+                        stored.exclude ? -number(value) : number(value),
+                      ),
+                ];
+              }),
             );
           else if (key === 'colorOverrides')
             packed[key] = Object.fromEntries(
@@ -4584,19 +4901,6 @@ const scope = { crypto: globalThis.crypto };
           ]),
         ];
       }
-      const actuals = [...activities, ...milestones].flatMap((item, index) =>
-        ['actualStart', 'actualFinish', 'actualCostMinor'].some((key) => item[key] !== undefined)
-          ? [
-              [
-                index,
-                item.actualStart ?? null,
-                item.actualFinish ?? null,
-                item.actualCostMinor ?? null,
-              ],
-            ]
-          : [],
-      );
-      if (actuals.length) payload.x = actuals;
       if (project.sharedViews.length)
         payload.v = project.sharedViews.map((view) => ({ name: view.name, ...packView(view) }));
       if (initialView) {
@@ -4778,8 +5082,21 @@ const scope = { crypto: globalThis.crypto };
           else if (key === 'filters')
             view[key] = Object.fromEntries(
               Object.entries(objectValue(value)).map(([index, choice]) => {
-                const dimension = at(dimensions, Number(index));
-                return [dimension.id, option(dimension, choice)];
+                const dimension =
+                  index === model.progressAxis
+                    ? model.progressFilter
+                    : at(dimensions, Number(index));
+                if (!Array.isArray(choice)) return [dimension.id, option(dimension, choice)];
+                const exclude = choice.length > 0 && integer(choice[0]) < 0;
+                if (!choice.length || choice.some((number) => integer(number) < 0 !== exclude))
+                  fail('invalid', 'The share link has a malformed view.');
+                return [
+                  dimension.id,
+                  model.filterValue({
+                    values: choice.map((number) => at(dimension.options, Math.abs(number) - 1).id),
+                    exclude,
+                  }),
+                ];
               }),
             );
           else if (key === 'colorOverrides')
@@ -4933,20 +5250,6 @@ const scope = { crypto: globalThis.crypto };
           }),
         };
       }
-      const tracked = new Set();
-      for (const entry of list(payload.x)) {
-        const [target, actualStart, actualFinish, actualCostMinor] = entries(entry, 4);
-        if (
-          tracked.has(target) ||
-          [actualStart, actualFinish, actualCostMinor].every((value) => value === null)
-        )
-          fail('invalid', 'The share link has malformed actuals.');
-        const item = at(raw.items, target);
-        tracked.add(target);
-        if (actualStart !== null) item.actualStart = actualStart;
-        if (actualFinish !== null) item.actualFinish = actualFinish;
-        if (actualCostMinor !== null) item.actualCostMinor = actualCostMinor;
-      }
       let repairs = [];
       const project = inPositions(raw, () => {
         try {
@@ -4990,25 +5293,6 @@ const scope = { crypto: globalThis.crypto };
       };
     }
 
-    function stripTracking(project, views) {
-      delete project.manifest.baseline;
-      for (const item of project.items) {
-        delete item.actualStart;
-        delete item.actualFinish;
-        delete item.actualCostMinor;
-      }
-      const trackingColumns = new Set(model.trackingListColumns);
-      for (const view of views) {
-        if (!view) continue;
-        delete view.timelineShowBaseline;
-        delete view.timelineShowActuals;
-        for (const key of COLUMN_FIELDS)
-          if (Array.isArray(view[key]))
-            view[key] = view[key].filter((column) => !trackingColumns.has(column));
-        if (trackingColumns.has(view.listSort)) view.listSort = '';
-      }
-    }
-
     /**
      * A smaller copy of a project and its initial view for a link:
      * `visibleItemIds` keeps only those activities and the dependencies
@@ -5016,7 +5300,7 @@ const scope = { crypto: globalThis.crypto };
      * activities' descriptions, `withoutSavedViews` drops the saved views,
      * and `withoutUnusedDimensions` drops dimensions and options no kept
      * activity uses, clearing view settings that referred to them.
-     * `withoutTracking` drops baseline and actuals plus their view settings.
+     * `withoutTracking` drops the baseline and its view settings.
      * The original is not changed.
      */
     function reduce(projectInput, initialView = null, options = {}) {
@@ -5086,11 +5370,7 @@ const scope = { crypto: globalThis.crypto };
           )
             record.listSort = '';
           if (record.filters)
-            record.filters = Object.fromEntries(
-              Object.entries(record.filters).filter(
-                ([id, choice]) => dimensionIds.has(id) && (!choice || optionIds.has(choice)),
-              ),
-            );
+            record.filters = model.pruneFilters(record.filters, project.manifest.dimensions);
           if (record.colorOverrides)
             record.colorOverrides = Object.fromEntries(
               Object.entries(record.colorOverrides).filter(([id]) => optionIds.has(id)),
@@ -5100,7 +5380,7 @@ const scope = { crypto: globalThis.crypto };
         project.sharedViews.forEach(prune);
         view = prune(view);
       }
-      if (options.withoutTracking) stripTracking(project, [...project.sharedViews, view]);
+      if (options.withoutTracking) model.stripTracking(project, [...project.sharedViews, view]);
       return { project: model.normalizeProject(project), view };
     }
 
@@ -5152,11 +5432,9 @@ const scope = { crypto: globalThis.crypto };
       for (const key of COLUMN_FIELDS) view[key] = view[key].filter(publicColumn);
       if (!publicColumn(view.listSort)) view.listSort = '';
       delete project.manifest.shareLinkCreatedAt;
-      if (!allowed.size) stripTracking(project, [view]);
+      if (!allowed.size) model.stripTracking(project, [view]);
       else {
         if (!allowed.has('baselineDates')) delete view.timelineShowBaseline;
-        if (!allowed.has('actualStart') || !allowed.has('actualFinish'))
-          delete view.timelineShowActuals;
         const hiddenMilestones = new Set(
           view.view === 'timeline' && view.timelineMilestoneMode === 'hide'
             ? project.items.filter((item) => item.type === 'milestone').map((item) => item.id)
@@ -5167,12 +5445,19 @@ const scope = { crypto: globalThis.crypto };
           if (!allowed.has('baselineDates') && !allowed.has('baselineCost') && !trackList)
             delete project.manifest.baseline;
           else {
+            // Only the active baseline is published, without its name or the
+            // status recorded at capture.
+            delete snapshot.earlier;
+            delete snapshot.id;
+            delete snapshot.name;
             if (!allowed.has('baselineCost')) delete snapshot.costCurrency;
             snapshot.items = snapshot.items.filter(({ id }) => !hiddenMilestones.has(id));
             for (const row of snapshot.items) {
               // Published tracking never needs historical names or reference keys.
               delete row.title;
               delete row.ref;
+              delete row.progress;
+              delete row.values;
               if (!allowed.has('baselineDates')) {
                 delete row.start;
                 delete row.end;
@@ -5181,9 +5466,6 @@ const scope = { crypto: globalThis.crypto };
             }
           }
         }
-        for (const item of project.items)
-          for (const key of ['actualStart', 'actualFinish', 'actualCostMinor'])
-            if (!allowed.has(key) || hiddenMilestones.has(item.id)) delete item[key];
       }
       if (!view.showRefs) {
         delete project.manifest.refPrefix;
@@ -5567,6 +5849,7 @@ const scope = { crypto: globalThis.crypto };
       'view',
     ],
     activity: [
+      'key',
       'title',
       'start',
       'end',
@@ -5577,8 +5860,8 @@ const scope = { crypto: globalThis.crypto };
       'dependsOn',
       'startAfter',
     ],
-    milestone: ['title', 'start', 'values', 'dependsOn', 'fixed'],
-    period: ['title', 'start', 'end', 'values'],
+    milestone: ['key', 'title', 'start', 'values', 'dependsOn', 'fixed'],
+    period: ['key', 'title', 'start', 'end', 'values'],
     option: ['name', 'color'],
     view: Object.keys(VIEW_FIELDS),
   };
@@ -5712,6 +5995,20 @@ const scope = { crypto: globalThis.crypto };
       });
       return [kind, found];
     });
+    // A key names one record for dependsOn, whatever its title; it is not
+    // kept in the plan.
+    const keys = new Map();
+    kinds.forEach(([kind, records], position) => {
+      const offset = kinds.slice(0, position).reduce((sum, [, before]) => sum + before.length, 0);
+      records.forEach((entry, index) => {
+        if (entry?.key === undefined) return;
+        const at = `${kind}[${index}].key`;
+        if (typeof entry.key !== 'string' || !/\S/.test(entry.key) || entry.key.length > 100)
+          fail(at, 'expected text of 1–100 characters');
+        if (keys.has(entry.key)) fail(at, `${JSON.stringify(entry.key)} is used twice`);
+        keys.set(entry.key, offset + index);
+      });
+    });
     const dependencies = (value, path) =>
       list(value, path).map((reference, position) => {
         const at = `${path}[${position}]`;
@@ -5719,10 +6016,14 @@ const scope = { crypto: globalThis.crypto };
           if (reference < 0 || reference >= total) fail(at, `there is no record ${reference}`);
           return reference;
         }
-        if (typeof reference !== 'string') fail(at, 'expected a title or an index');
+        if (typeof reference !== 'string') fail(at, 'expected a key, a title or an index');
+        if (keys.has(reference)) return keys.get(reference);
         const [kind, found] = titles.find(([, named]) => named.has(reference)) || [];
         if (!kind)
-          fail(at, `no activity, milestone or period is titled ${JSON.stringify(reference)}`);
+          fail(
+            at,
+            `no activity, milestone or period has the key or title ${JSON.stringify(reference)}`,
+          );
         if (found.get(reference) < 0)
           fail(at, `several ${kind} are titled ${JSON.stringify(reference)}; use an index`);
         return found.get(reference);
@@ -5957,9 +6258,9 @@ const scope = { crypto: globalThis.crypto };
   /** Read a share-link payload back into a plan. Saved views (`v`) and view
       settings the plan has no field for are not carried; `lost` names them. */
   function fromPayload(payload) {
-    if (payload.b !== undefined || payload.x !== undefined)
+    if (payload.b !== undefined)
       throw new PlanError(
-        'Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.',
+        'Plan JSON v1 cannot represent a baseline. Open the link in Tidigar to keep its tracking data.',
       );
     const base = dayNumber(`${String(payload.y).padStart(4, '0')}-01-01`);
     const day = (offset) => isoDate(base + offset);
@@ -6178,7 +6479,7 @@ const PLAN_LABELS = { i: 'activities', s: 'milestones', p: 'periods', v: 'views'
 
 const { inPlanTerms, describe } = planFormat;
 
-// Parameters after the link, such as a screen's token `&k=`, are left out.
+// Ignore extra parameters in the fragment.
 function fragmentOf(link) {
   const text = String(link).trim();
   const hash = text.indexOf('#');

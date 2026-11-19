@@ -46,14 +46,16 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
 ```
 
 - Unknown fields are errors; owners, status and categories belong in `values`.
-- `name` is required, 1–100 characters. Everything else is optional: `description`, `workDays`
+- `name` is required, 1–100 characters. Everything else is optional: `description` (500), `workDays`
   (`true` plans in work days), `dimensions`, `activities`, `milestones`, `periods` and `view`.
 - Dates are `YYYY-MM-DD`. `end` is inclusive; left out, the activity lasts one day.
 - `dimensions` maps a name to its options in order. An option is a name, or
   `{ "name": "Design", "color": "#4f7cff" }` for a stored plan; a link carries no colors. An
   activity's `values` names one option per dimension; an option no dimension lists is added.
-- `dependsOn` names any activity, milestone or period by title, or where titles repeat by
-  0-based index, counting activities, then milestones, then periods. A period waits for nothing.
+- `dependsOn` names any activity, milestone or period by its unique `key`, title or 0-based index
+  (activities, milestones, periods). A period waits for nothing.
+- A record starts at least a day after an activity or period it depends on, and on or after a
+  milestone. Weekends are allowed.
 - An activity’s `startAfter` is an array in the same order as `dependsOn`, for example
   `"dependsOn": ["Design", "Approval"], "startAfter": [50, 100]`. Values are `0`, `25`, `50`, `75`
   or `100`; missing entries mean `100`, and trailing `100` entries may be omitted. It cannot have
@@ -64,7 +66,7 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
   dates that meet the intended threshold. Tidigar’s editor uses the exact threshold when scheduling.
 - Titles are at most 180 characters; milestones and periods need one.
 - `milestones`: `{ "title", "start" }`; `periods`: `{ "title", "start", "end" }`. Both take
-  `values`. A period is time off: a plan in work days has no work days during it.
+  `key` and `values`. A period is time off: a plan in work days has no work days during it.
 - `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and
   `columns` take dimension names. Except for `groupBy`, they also take `"@progress"`.
   `start` and `end` set the timeline range. `layout` is
@@ -115,7 +117,7 @@ python3 tidigar_link.py --read "<link>" > plan.json
 
 Edit the plan and run either builder again. `--read` reports any corrections made while reading; use
 the JavaScript module's `--validate "<link>"` to check a finished link without rewriting it.
-Plan JSON v1 supports `t=1` links. Open `t=2` links in Tidigar to retain their baseline and actuals.
+Plan JSON v1 supports `t=1` links. Open `t=2` links in Tidigar to retain their baseline.
 `--embed plan.json` prints iframe code. The
 [plan schema](https://tidigar.com/agents/schema/plan-v1.json) describes the JSON fields;
 cross-record rules are checked by Tidigar and the builders.

@@ -14,9 +14,9 @@ LAYOUTS = {"classic": "single-label", "compact": "compact"}
 STYLES = ["standard", "minimal", "airy", "contrast", "terminal"]
 KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "costUnit", "workDays", "dimensions",
                  "activities", "milestones", "periods", "view"],
-        "activity": ["title", "start", "end", "description", "estimatedCostMinor", "progress", "values", "dependsOn", "startAfter"],
-        "milestone": ["title", "start", "values", "dependsOn", "fixed"],
-        "period": ["title", "start", "end", "values"],
+        "activity": ["key", "title", "start", "end", "description", "estimatedCostMinor", "progress", "values", "dependsOn", "startAfter"],
+        "milestone": ["key", "title", "start", "values", "dependsOn", "fixed"],
+        "period": ["key", "title", "start", "end", "values"],
         "option": ["name", "color"], "view": list(VIEW)}
 AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group"}
 MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow"}
@@ -151,6 +151,20 @@ def to_payload(plan):
                 found[r["title"]] = -1 if r["title"] in found else offset + i
         titles.append((kind, found))
         offset += len(records)
+    # A key names one record for dependsOn, whatever its title; it is not kept.
+    keys, offset = {}, 0
+    for kind, records in kinds:
+        for i, r in enumerate(records):
+            if "key" not in r:
+                continue
+            at = f"{kind}[{i}].key"
+            key = r["key"]
+            if not isinstance(key, str) or not key.strip() or len(key) > 100:
+                fail(at, "expected text of 1–100 characters")
+            if key in keys:
+                fail(at, f"{q(key)} is used twice")
+            keys[key] = offset + i
+        offset += len(records)
 
     def depends(value, path):
         found = []
@@ -161,11 +175,13 @@ def to_payload(plan):
                     fail(at, f"there is no record {ref}")
                 index = ref
             elif not isinstance(ref, str):
-                fail(at, "expected a title or an index")
+                fail(at, "expected a key, a title or an index")
+            elif ref in keys:
+                index = keys[ref]
             else:
                 kind, named_ = next(((k, n) for k, n in titles if ref in n), (None, None))
                 if kind is None:
-                    fail(at, f"no activity, milestone or period is titled {q(ref)}")
+                    fail(at, f"no activity, milestone or period has the key or title {q(ref)}")
                 if named_[ref] < 0:
                     fail(at, f"several {kind} are titled {q(ref)}; use an index")
                 index = named_[ref]
@@ -385,8 +401,8 @@ def size(text):
 
 def link(payload):
     """The readable link of a checked payload: t=1~...~!"""
-    if "b" in payload or "x" in payload:
-        raise ValueError("Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.")
+    if "b" in payload:
+        raise ValueError("Plan JSON v1 cannot represent a baseline. Open the link in Tidigar to keep its tracking data.")
     year = payload["y"]
     base = datetime.date(year, 1, 1).toordinal()
     dims, rows, marks, bands = payload.get("m", []), payload.get("i", []), payload.get("s", []), payload.get("p", [])
@@ -485,7 +501,7 @@ def payload_of(url):
     fragment = url.split("#", 1)[-1].split("&", 1)[0]
     records = fragment.split("~")
     if records[0] == "t=2":
-        raise ValueError("Plan JSON v1 cannot represent baseline or actuals. Open the link in Tidigar to keep its tracking data.")
+        raise ValueError("Plan JSON v1 cannot represent a baseline. Open the link in Tidigar to keep its tracking data.")
     if records[0] != "t=1":
         raise ValueError("Give a readable Tidigar link, #t=1~...")
     problems = []

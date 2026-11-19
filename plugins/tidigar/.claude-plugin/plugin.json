@@ -1,7 +1,7 @@
 {
   "name": "tidigar",
   "displayName": "Tidigar",
-  "description": "Create Tidigar roadmaps and Gantt charts as share links, or read and update plans in Tidigar Business or Tidigar Server.",
+  "description": "Create Tidigar roadmaps and Gantt charts as share links without an account, or connect to read and update plans stored in Tidigar or Tidigar Server.",
   "author": {
     "name": "Hamacher Software AB",
     "email": "hello@tidigar.com",
@@ -17,5 +17,15 @@
     "project-plan",
     "planning"
   ],
-  "icon": "./assets/icon.png"
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://tidigar.com/agents",
+  "supportUrl": "https://tidigar.com/agents/cloud",
+  "privacyPolicyUrl": "https://tidigar.com/privacy",
+  "termsOfServiceUrl": "https://tidigar.com/terms",
+  "mcpServers": {
+    "tidigar": {
+      "type": "http",
+      "url": "https://app.tidigar.com/mcp"
+    }
+  }
 }

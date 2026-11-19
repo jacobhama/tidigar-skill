@@ -98,10 +98,10 @@ p1=Autumn_break/10-26/5
 ### Dimensions and the view
 
 - `m1=Team:Household,Installer` defines ordered options with standard colors.
-- `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names
-  and dates as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
-  Board grouping uses `rows:` and `columns:`. List cost summary grouping uses
-  `cost-group:`, as in `v=list/cost-group:Team`; omitted means total only.
+- `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names and
+  dates, as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
+  Board uses `rows:` and `columns:`. Add `costs` to show totals, with optional
+  List grouping as in `v=list/costs/cost-group:Team`.
 - Timeline layout is `classic` (one activity per row, fixed labels and reference
   keys) or `compact` (shared rows). Styles are `minimal`, `airy`, `contrast`
   and `terminal`. A layout or style alone selects the timeline, as in `v=classic`.
@@ -125,7 +125,7 @@ for color. Links omit assignee settings.
 
 ## Tracking records
 
-Use `t=2` for a readable link with baseline or actuals. Its other
+Use `t=2` for a readable link with a baseline. Its other
 records follow the same grammar as version 1. Tracking fields are
 separated with `/` and write missing values as `-`.
 
@@ -138,19 +138,19 @@ separated with `/` and write missing values as `-`.
   `/<title>/<ref>` fields for the captured strings. A missing title before a
   reference key is `-`. Encode the literal string `-` as `%2D` in either
   field, and use the same text escapes as other readable fields.
-- `x1=<work key>/<actual start>/<actual finish>/<actual cost>` records
-  actuals for live work. A milestone has only actual finish. List each
-  work key at most once.
 
 Use full dates `YYYY-MM-DD` or local minutes `YYYY-MM-DDTHH:mm` for
-tracking values, minor units for budgets and actual costs, and whole
+tracking values, minor units for budgets, and whole
 seconds in the UTC timestamp. Zero survives a copy. Compact copy links
 with tracking use `s=2`; other compact links use `s=1`. Full copies
 include historical baseline rows and give live records new IDs. The default copy omits tracking and uses `s=1`. To include tracking, turn
-off **Leave out baseline and actuals**. A visible-only copy limits baseline
-rows to copied records. Readable Timeline settings `baseline` and `actuals`
-show the respective layers. Compact links keep both settings. Published
-screens carry only tracking approved at publication and used by the view.
+off **Leave out the baseline**. A visible-only copy limits baseline
+rows to copied records. The readable Timeline setting `baseline` shows the
+baseline layer, and compact links keep it. Published screens carry only
+tracking approved at publication and used by the view. Both carry only the
+active baseline's dates and budgets. Links carry no
+actual or forecast values; a reader ignores older `x` records and the
+`actuals` Timeline setting.
 
 ## Example
 
