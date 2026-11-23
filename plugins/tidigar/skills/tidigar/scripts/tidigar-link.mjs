@@ -18,6 +18,1297 @@
 const scope = { crypto: globalThis.crypto };
 (function (globalThis) {
 /*
+ * Date, local wall-clock, time-scale and work-calendar primitives for
+ * Tidigar's storage model. Pure and DOM-free.
+ *
+ * When loaded as a script it publishes `globalThis.tidigarProjectCalendar`;
+ * CommonJS consumers receive the same object from
+ * `require('./project-calendar.js')`.
+ */
+
+(function installProjectCalendar(root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  if (root) root.tidigarProjectCalendar = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function projectCalendarModule() {
+  'use strict';
+
+  const DAY = 86400000;
+  const MINUTE = 60000;
+  const MIN_DATE = '1900-01-01';
+  const MAX_DATE = '2200-12-31';
+  const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const CLOCK_PATTERN = /^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/;
+  const NIGHT_PATTERN = /^(([01]\d|2[0-3]):[0-5]\d)-(([01]\d|2[0-3]):[0-5]\d)$/;
+
+  function invalid(path, message) {
+    throw new TypeError(`Invalid ${path}${message ? `: ${message}` : ''}`);
+  }
+
+  function parseDate(value) {
+    if (typeof value !== 'string' || !DATE_PATTERN.test(value)) return NaN;
+    const timestamp = Date.parse(`${value}T00:00:00Z`);
+    if (!Number.isFinite(timestamp)) return NaN;
+    const canonical = new Date(timestamp).toISOString().slice(0, 10);
+    if (canonical !== value || value < MIN_DATE || value > MAX_DATE) return NaN;
+    return timestamp;
+  }
+
+  function dateValue(value, path) {
+    if (!Number.isFinite(parseDate(value))) invalid(path, 'expected a valid date');
+    return value;
+  }
+
+  // A local wall-clock minute, `YYYY-MM-DDTHH:mm` with no zone, as a
+  // timestamp on the same axis as `parseDate`.
+  function parseClock(value) {
+    if (typeof value !== 'string' || !CLOCK_PATTERN.test(value)) return NaN;
+    return Number.isFinite(parseDate(value.slice(0, 10))) ? Date.parse(`${value}:00Z`) : NaN;
+  }
+
+  /*
+   * A value's precision is its shape: a date is a day and a local time a
+   * minute, in the same fields of one plan. Both read `end` as the last unit
+   * a record occupies, so a successor starts at `end + unit`.
+   */
+  const DAY_SCALE = Object.freeze({
+    precision: 'days',
+    unit: DAY,
+    parse: parseDate,
+    iso: (date) => date.toISOString().slice(0, 10),
+    min: parseDate(MIN_DATE),
+    max: parseDate(MAX_DATE),
+  });
+  const CLOCK_SCALE = Object.freeze({
+    precision: 'clock',
+    unit: MINUTE,
+    parse: parseClock,
+    iso: (date) => date.toISOString().slice(0, 16),
+    min: parseDate(MIN_DATE),
+    max: parseDate(MAX_DATE) + DAY - MINUTE,
+  });
+
+  /** The scale of a stored value, or of the precision `'clock'` or `'days'`. */
+  function timeScale(value) {
+    return value === 'clock' || (typeof value === 'string' && CLOCK_PATTERN.test(value))
+      ? CLOCK_SCALE
+      : DAY_SCALE;
+  }
+
+  const isClock = (value) => typeof value === 'string' && CLOCK_PATTERN.test(value);
+  /** A stored value as a timestamp on the shared local axis: a day at 00:00. */
+  const timeOf = (value) => timeScale(value).parse(value);
+  /** The first moment after a record's end, in that record's unit. */
+  const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
+  // A milestone is due at its moment, an activity at its end.
+  const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
+
+  const followUpClocks = new Map();
+  function localFollowUpMinute(now, timeZone) {
+    let clock = followUpClocks.get(timeZone);
+    if (!clock) {
+      clock = new Intl.DateTimeFormat('en-GB', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      });
+      followUpClocks.set(timeZone, clock);
+    }
+    const parts = Object.fromEntries(
+      clock.formatToParts(now).map(({ type, value }) => [type, value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  }
+
+  /** Mark work done on the day, or the local minute for clock work, it reaches 100 %.
+   * Finish (an activity's end, a milestone's moment) becomes now in the plan's time
+   * zone; a later Start moves with it. Undated work and incoming milestones keep
+   * their dates. Return whether a date changed. */
+  function recordCompletion(
+    project,
+    item,
+    previousProgress,
+    { now = Date.now(), timeZone = project?.manifest?.timeZone } = {},
+  ) {
+    if (!item || item.type === 'period' || item.source) return false;
+    if (Number(previousProgress) === 100 || Number(item.progress) !== 100) return false;
+    const due = scheduledFinish(item);
+    if (due === undefined) return false;
+    const minute = localFollowUpMinute(now, timeZone);
+    const value = isClock(due) ? minute : minute.slice(0, 10);
+    if (item.type === 'milestone') {
+      if (item.start === value) return false;
+      item.start = value;
+      return true;
+    }
+    // An activity's dates share one precision.
+    const start = timeOf(item.start) > timeOf(value) ? value : item.start;
+    if (item.end === value && item.start === start) return false;
+    Object.assign(item, { start, end: value });
+    return true;
+  }
+
+  // Only two clock values imply a minute comparison. A day value carries
+  // no time of day, so compare dates using the plan schedule when either side is a day.
+  function scheduleVariance(baseline, value, calendar) {
+    const baselineTime = timeOf(baseline);
+    const comparedTime = timeOf(value);
+    if (!Number.isFinite(baselineTime) || !Number.isFinite(comparedTime)) return null;
+    if (isClock(baseline) && isClock(value))
+      return { unit: 'minutes', value: (comparedTime - baselineTime) / MINUTE };
+    const from = Math.floor(baselineTime / DAY) * DAY;
+    const to = Math.floor(comparedTime / DAY) * DAY;
+    if (!calendar) return { unit: 'days', value: (to - from) / DAY };
+    // Count (earlier, later], so reversing a comparison reverses its sign,
+    // even when an endpoint falls on a weekend or a non-working period.
+    const count = calendar.countWorkDays(Math.min(from, to) + DAY, Math.max(from, to));
+    return { unit: 'work-days', value: count === 0 ? 0 : Math.sign(to - from) * count };
+  }
+
+  /** The first moment at or after `time` where a record shaped like `like`
+   * may start: a day record starts only at midnight. */
+  const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
+  // The values a plan's records hold: activity starts and milestone moments.
+  const recordTimes = (project) =>
+    (project?.items || []).flatMap((item) =>
+      item.start === undefined || item.type === 'period' ? [] : [item.start],
+    );
+  /** Whether a plan holds any local time; `only` when it holds nothing else. */
+  function holdsLocalTimes(project, { only = false } = {}) {
+    const times = recordTimes(project);
+    return only ? times.length > 0 && times.every(isClock) : times.some(isClock);
+  }
+  /** A timestamp written in the shape of `like`. */
+  const valueAt = (time, like) => timeScale(like).iso(new Date(time));
+
+  function scaleValue(value, path) {
+    if (!Number.isFinite(timeOf(value))) invalid(path, 'expected a valid date or local time');
+    return value;
+  }
+
+  function zoneValue(value, path) {
+    if (typeof value !== 'string' || !value || value.length > 64)
+      invalid(path, 'expected a time zone');
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: value });
+    } catch (_error) {
+      invalid(path, 'expected a named time zone');
+    }
+    return value;
+  }
+
+  // The night a timeline shades at hours: `HH:mm-HH:mm`, local wall-clock
+  // times; a start after the end runs across midnight.
+  function nightValue(value) {
+    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
+    if (!match || match[1] === match[3])
+      invalid('manifest.nightHours', 'expected two different times as HH:mm-HH:mm');
+    return value;
+  }
+
+  /** A night's start and end as minutes of the day, or null for none. */
+  function nightMinutes(value) {
+    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
+    if (!match || match[1] === match[3]) return null;
+    const minutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3));
+    return { start: minutes(match[1]), end: minutes(match[3]) };
+  }
+
+  function dateTimestamp(value) {
+    return parseDate(value);
+  }
+
+  function dayAfter(value) {
+    return dateTimestamp(value) + DAY;
+  }
+
+  function ensureDateRange(start, end, path) {
+    dateValue(start, `${path}.start`);
+    dateValue(end, `${path}.end`);
+    if (start > end) invalid(path, 'start must not be after end');
+  }
+
+  function utcTimestamp(value, path) {
+    if (
+      typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) ||
+      new Date(value).toISOString().replace('.000Z', 'Z') !== value
+    )
+      invalid(path, 'must be a UTC ISO 8601 timestamp with whole seconds');
+    return value;
+  }
+
+  /**
+   * The work days of a project: Monday to Friday, except days covered by a
+   * period: every period is time off, such as a vacation. Dates are UTC midnight timestamps. `firstWorkDay` and
+   * `lastWorkDay` may return a day after MAX_DATE, which callers reject.
+   */
+  function workCalendar(periodIndicators = []) {
+    const limit = parseDate(MAX_DATE) + 400 * DAY;
+    // Periods merged into sorted, disjoint [start, end] ranges.
+    const ranges = [];
+    for (const [start, end] of periodIndicators
+      .filter(Boolean)
+      .map((period) => [parseDate(period.start), parseDate(period.end)])
+      .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && start <= end)
+      .sort((left, right) => left[0] - right[0])) {
+      const last = ranges[ranges.length - 1];
+      if (last && start <= last[1] + DAY) last[1] = Math.max(last[1], end);
+      else ranges.push([start, end]);
+    }
+    // The period range that holds `time`, or null.
+    function offWork(time) {
+      let low = 0;
+      let high = ranges.length - 1;
+      while (low <= high) {
+        const middle = (low + high) >> 1;
+        if (time < ranges[middle][0]) high = middle - 1;
+        else if (time > ranges[middle][1]) low = middle + 1;
+        else return ranges[middle];
+      }
+      return null;
+    }
+    const weekend = (time) => {
+      const weekday = new Date(time).getUTCDay();
+      return weekday === 0 || weekday === 6;
+    };
+    const isWorkDay = (time) => !weekend(time) && !offWork(time);
+    function firstWorkDay(time) {
+      let day = time;
+      while (day <= limit) {
+        const range = offWork(day);
+        if (range) day = range[1] + DAY;
+        else if (weekend(day)) day += DAY;
+        else return day;
+      }
+      return day;
+    }
+    /** Work days from `start` through `end`, both included. */
+    function countWorkDays(start, end) {
+      let count = 0;
+      for (let day = firstWorkDay(start); day <= end; day = firstWorkDay(day + DAY)) count += 1;
+      return count;
+    }
+    /** The last day of `duration` work days counted from `start`. */
+    function lastWorkDay(start, duration) {
+      let day = firstWorkDay(start);
+      for (let count = 1; count < duration && day <= limit; count += 1)
+        day = firstWorkDay(day + DAY);
+      return day;
+    }
+    /** An activity's length in work days, read from its dates: at least one. */
+    const durationOf = (start, end) => Math.max(1, countWorkDays(start, end));
+    return { isWorkDay, firstWorkDay, countWorkDays, lastWorkDay, durationOf };
+  }
+
+  return {
+    DAY,
+    MINUTE,
+    MIN_DATE,
+    MAX_DATE,
+    DATE_PATTERN,
+    CLOCK_PATTERN,
+    NIGHT_PATTERN,
+    DAY_SCALE,
+    CLOCK_SCALE,
+    parseDate,
+    dateValue,
+    parseClock,
+    timeScale,
+    isClock,
+    timeOf,
+    timeAfter,
+    scheduledFinish,
+    localFollowUpMinute,
+    recordCompletion,
+    scheduleVariance,
+    startingAt,
+    holdsLocalTimes,
+    valueAt,
+    scaleValue,
+    zoneValue,
+    nightValue,
+    nightMinutes,
+    dateTimestamp,
+    dayAfter,
+    ensureDateRange,
+    utcTimestamp,
+    workCalendar,
+  };
+});
+
+/*
+ * Baseline snapshots, normalization, follow-up status, tracking columns and
+ * schedule/cost variance comparisons for Tidigar's storage model. Pure and
+ * DOM-free.
+ *
+ * When loaded as a script it publishes `globalThis.tidigarProjectBaseline`;
+ * CommonJS consumers receive the same object from
+ * `require('./project-baseline.js')`.
+ */
+
+(function installProjectBaseline(root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  if (root) root.tidigarProjectBaseline = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function projectBaselineModule() {
+  'use strict';
+
+  // A plan keeps at most this many baselines, the active one included.
+  const MAX_BASELINES = 20;
+  const MAX_BASELINE_NAME = 100;
+
+  const SCHEDULE_TRACKING_COLUMNS = Object.freeze([
+    'baselineStart',
+    'currentStart',
+    'currentStartVariance',
+    'baselineFinish',
+    'currentFinish',
+    'currentFinishVariance',
+  ]);
+  const COST_TRACKING_COLUMNS = Object.freeze([
+    'budgetMinor',
+    'currentEstimateMinor',
+    'currentCostVarianceMinor',
+  ]);
+  const TRACKING_LIST_COLUMNS = Object.freeze([
+    ...SCHEDULE_TRACKING_COLUMNS,
+    ...COST_TRACKING_COLUMNS,
+  ]);
+  // A public List may keep the underlying values needed by visible variances.
+  const SCREEN_TRACKING_COLUMNS = Object.freeze({
+    baselineStart: ['baselineDates'],
+    currentStart: [],
+    currentStartVariance: ['baselineDates'],
+    baselineFinish: ['baselineDates'],
+    currentFinish: [],
+    currentFinishVariance: ['baselineDates'],
+    budgetMinor: ['baselineCost'],
+    currentEstimateMinor: [],
+    currentCostVarianceMinor: ['baselineCost'],
+  });
+
+  function createFactory({
+    calendar,
+    kindOf,
+    validEstimatedCost,
+    invalid,
+    requireRecord,
+    requireArray,
+    stringValue,
+    uuidValue,
+    makeIdRegistry,
+    refValue,
+    COST_CURRENCIES,
+    PROGRESS_VALUES,
+    MAX_ITEMS,
+    MAX_DIMENSIONS,
+  }) {
+    const {
+      DAY,
+      isClock,
+      timeOf,
+      timeAfter,
+      scheduledFinish,
+      localFollowUpMinute,
+      scheduleVariance,
+      scaleValue,
+      utcTimestamp,
+      workCalendar,
+    } = calendar;
+
+    // Display intervals use the saved view and only the records it is showing,
+    // against `view.comparedBaseline` when given, else the active baseline.
+    function timelineTracking(project, view, records = project?.items ?? []) {
+      const baseline = new Map();
+      const placements = new Map();
+      const saved = view?.timelineShowBaseline
+        ? new Map(
+            ((view.comparedBaseline ?? project?.manifest.baseline)?.items ?? []).map((row) => [
+              row.id,
+              row,
+            ]),
+          )
+        : new Map();
+      let first = Infinity;
+      let last = -Infinity;
+      let days = false;
+      let clock = false;
+      for (const item of records) {
+        const row = saved.get(item.id);
+        if (!row?.start) continue;
+        baseline.set(item.id, row);
+        const end = row.end ?? row.start;
+        placements.set(item.id, { start: row.start, end });
+        first = Math.min(first, timeOf(row.start));
+        last = Math.max(last, timeAfter(end));
+        days ||= !isClock(row.start) || !isClock(end);
+        clock ||= isClock(row.start) || isClock(end);
+      }
+      const room = days ? DAY : DAY / 24;
+      const range =
+        last >= first
+          ? {
+              start: Math.floor((first - room) / DAY) * DAY,
+              end: Math.ceil((last + room) / DAY) * DAY,
+              clock,
+            }
+          : null;
+      return { baseline, placements, range };
+    }
+
+    const followUpBaselines = new WeakMap();
+    function baselineFinish(project, id) {
+      const rows = project?.manifest?.baseline?.items;
+      if (!rows) return undefined;
+      if (!followUpBaselines.has(rows))
+        followUpBaselines.set(rows, new Map(rows.map((row) => [row.id, scheduledFinish(row)])));
+      return followUpBaselines.get(rows).get(id);
+    }
+
+    /** Compare the current due date of open and completed work against the saved due date. */
+    function followUpStatus(
+      item,
+      { project, now = Date.now(), timeZone = project?.manifest?.timeZone, baselineDue } = {},
+    ) {
+      const due = scheduledFinish(item);
+      if (Number(item.progress) === 100) {
+        const reference = baselineDue ?? baselineFinish(project, item.id) ?? due;
+        return due && reference && timeOf(due) >= timeAfter(reference) ? 'done-late' : 'done';
+      }
+      if (!due) return 'undated';
+      const localMinute = localFollowUpMinute(now, timeZone);
+      if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
+      const reference = baselineDue ?? baselineFinish(project, item.id);
+      if (reference && timeOf(due) >= timeAfter(reference)) return 'behind-baseline';
+      return due.slice(0, 10) === localMinute.slice(0, 10) ? 'today' : 'upcoming';
+    }
+
+    const activityField = (item, field) =>
+      item && kindOf(item) === 'activity' ? item[field] : undefined;
+    const trackingCost = (item, field) => {
+      const amount = activityField(item, field);
+      return validEstimatedCost(amount) ? amount : null;
+    };
+
+    function trackingVariance(baseline, start, finish, cost, workCal) {
+      const budget = trackingCost(baseline, 'estimatedCostMinor');
+      return {
+        start: scheduleVariance(activityField(baseline, 'start'), start, workCal),
+        finish: scheduleVariance(scheduledFinish(baseline), finish, workCal),
+        costMinor: budget === null || cost === null ? null : cost - budget,
+      };
+    }
+
+    function summarizeTrackingCosts(amounts) {
+      let totalMinor = 0;
+      let known = 0;
+      for (const amount of amounts) {
+        if (amount === null) continue;
+        totalMinor += amount;
+        known += 1;
+      }
+      return { totalMinor: known ? totalMinor : null, known, eligible: amounts.length };
+    }
+
+    // Work-day plans count variances in the current plan's working days.
+    const trackingCalendar = (project) =>
+      project?.manifest?.schedule === 'work-days'
+        ? workCalendar(project.items.filter((item) => kindOf(item) === 'period'))
+        : null;
+
+    /** Compare baseline and live records in the same plan currency by stable ID. */
+    function compareBaseline(baselineItemsList, currentItems, project) {
+      const workCal = trackingCalendar(project);
+      const trackedById = (items) =>
+        new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
+      const baselineById = trackedById(baselineItemsList);
+      const currentById = trackedById(currentItems);
+      const amounts = {
+        baseline: [],
+        current: [],
+        vsCurrent: [],
+      };
+      const rows = [];
+      for (const id of new Set([...currentById.keys(), ...baselineById.keys()])) {
+        const baseline = baselineById.get(id);
+        const current = currentById.get(id);
+        const currentCost = trackingCost(current, 'estimatedCostMinor');
+        const vsCurrent = trackingVariance(
+          baseline,
+          activityField(current, 'start'),
+          scheduledFinish(current),
+          currentCost,
+          workCal,
+        );
+        rows.push({
+          id,
+          scope: !baseline ? 'added' : !current ? 'removed' : 'retained',
+          vsCurrent,
+        });
+
+        const baselineCanCarryCost = baseline && kindOf(baseline) === 'activity';
+        const currentCanCarryCost = current && kindOf(current) === 'activity';
+        if (baselineCanCarryCost)
+          amounts.baseline.push(trackingCost(baseline, 'estimatedCostMinor'));
+        if (currentCanCarryCost) {
+          amounts.current.push(currentCost);
+        }
+        if (baselineCanCarryCost && currentCanCarryCost)
+          amounts.vsCurrent.push(vsCurrent.costMinor);
+      }
+      return {
+        rows,
+        cost: Object.fromEntries(
+          Object.entries(amounts).map(([key, values]) => [key, summarizeTrackingCosts(values)]),
+        ),
+      };
+    }
+
+    // The earliest start and latest finish of records, and their budget or estimate.
+    function trackingSpan(records) {
+      let start, finish;
+      const amounts = [];
+      for (const record of records) {
+        const from = record.start;
+        const to = scheduledFinish(record);
+        if (from !== undefined && (start === undefined || timeOf(from) < timeOf(start)))
+          start = from;
+        if (to !== undefined && (finish === undefined || timeAfter(to) > timeAfter(finish)))
+          finish = to;
+        if (kindOf(record) === 'activity') amounts.push(trackingCost(record, 'estimatedCostMinor'));
+      }
+      return { start, finish, cost: summarizeTrackingCosts(amounts) };
+    }
+
+    function compareSpans(baselineRows, currentRecords, workCal) {
+      const baseline = trackingSpan(baselineRows);
+      const current = trackingSpan(currentRecords);
+      const { totalMinor: budget } = baseline.cost;
+      const { totalMinor: estimate } = current.cost;
+      return {
+        baseline,
+        current,
+        variance: {
+          start: scheduleVariance(baseline.start, current.start, workCal),
+          finish: scheduleVariance(baseline.finish, current.finish, workCal),
+          costMinor: budget === null || estimate === null ? null : estimate - budget,
+        },
+      };
+    }
+
+    /**
+     * Baseline and current totals of a plan and of each group of a dimension.
+     * `records` are the live activities and milestones shown; a baseline row
+     * counts when its live record is shown, and a row whose record was removed
+     * counts when `shown(row)` accepts it. The baseline side groups a row by
+     * its captured `values`; a row without captured status, saved before
+     * baselines held it or imported, follows its live record and is otherwise
+     * in no group. The current side groups live records. `groupOf` groups by
+     * something other than a dimension, such as the assignee: rows then follow
+     * their live records. Each side has its earliest start, latest finish and
+     * budget or estimate with coverage; the variances compare the totals.
+     * A group named by a value no longer in the dimension is `removed`.
+     */
+    function compareBaselineGroups(
+      project,
+      {
+        baseline = project.manifest.baseline,
+        groupBy = '',
+        records = project.items,
+        shown = () => true,
+        groupOf,
+      } = {},
+    ) {
+      const workCal = trackingCalendar(project);
+      const tracked = (list) => list.filter((record) => kindOf(record) !== 'period');
+      const live = new Map(tracked(project.items).map((record) => [record.id, record]));
+      const visible = new Map(tracked(records).map((record) => [record.id, record]));
+      const rows = (baseline?.items ?? []).filter((row) =>
+        live.has(row.id) ? visible.has(row.id) : shown(row),
+      );
+      const total = compareSpans(rows, [...visible.values()], workCal);
+      if (!groupBy) return { total, groups: [] };
+      const valueOf = groupOf ?? ((record) => record.values?.[groupBy] || '');
+      const groups = new Map();
+      const add = (key, side, record) => {
+        if (key === null) return;
+        if (!groups.has(key)) groups.set(key, { baseline: [], current: [] });
+        groups.get(key)[side].push(record);
+      };
+      for (const row of rows) {
+        const record = visible.get(row.id);
+        add(
+          !groupOf && row.progress !== undefined
+            ? row.values?.[groupBy] || ''
+            : record
+              ? valueOf(record)
+              : null,
+          'baseline',
+          row,
+        );
+      }
+      for (const record of visible.values()) add(valueOf(record), 'current', record);
+      const dimension = groupOf
+        ? null
+        : (project.manifest.dimensions ?? []).find(({ id }) => id === groupBy);
+      const options = (dimension?.options ?? []).map(({ id }) => id);
+      const rank = (key) => {
+        const index = options.indexOf(key);
+        return index >= 0 ? index : key === '' ? options.length : options.length + 1;
+      };
+      return {
+        total,
+        groups: [...groups]
+          .sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+          .map(([id, sides]) => ({
+            id,
+            removed: !groupOf && id !== '' && !options.includes(id),
+            ...compareSpans(sides.baseline, sides.current, workCal),
+          })),
+      };
+    }
+
+    function baselineItem(item) {
+      const { id, type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
+      const captured = values && Object.keys(values).sort();
+      return {
+        id,
+        ...(type === 'milestone' ? { type } : {}),
+        ...(title ? { title } : {}),
+        ...(ref ? { ref } : {}),
+        ...(start === undefined ? {} : { start }),
+        ...(end === undefined ? {} : { end }),
+        ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
+        ...(progress === undefined ? {} : { progress }),
+        ...(captured?.length
+          ? { values: Object.fromEntries(captured.map((key) => [key, values[key]])) }
+          : {}),
+      };
+    }
+
+    function baselineItems(items) {
+      return items
+        .filter((item) => kindOf(item) !== 'period')
+        .map(baselineItem)
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+
+    /* A snapshot saved without an ID, by an earlier version or a command that
+       names none, is identified by its plan and capture second, so every
+       client derives the same ID for it. */
+    function derivedBaselineId(projectId, capturedAt) {
+      const plan = projectId.replace(/-/g, '').toLowerCase();
+      const seconds = Math.floor(Date.parse(capturedAt) / 1000)
+        .toString(16)
+        .padStart(12, '0')
+        .slice(-12);
+      const hex = seconds + '8' + plan.slice(13, 16) + '8' + plan.slice(17);
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+
+    /** The name a baseline gets when none is given: its UTC capture date. */
+    const defaultBaselineName = (capturedAt) => capturedAt.slice(0, 10);
+
+    // A newer snapshot sorts later; equal capture times go by ID.
+    const baselineOrder = (a, b) =>
+      a.capturedAt < b.capturedAt
+        ? -1
+        : a.capturedAt > b.capturedAt
+          ? 1
+          : a.id < b.id
+            ? -1
+            : a.id > b.id
+              ? 1
+              : 0;
+
+    function normalizeSnapshot(source, path, projectId, nested) {
+      const { capturedAt, costCurrency } = source;
+      const allowed = [
+        'id',
+        'name',
+        'capturedAt',
+        'costCurrency',
+        'items',
+        ...(nested ? [] : ['earlier']),
+      ];
+      if (Object.keys(source).some((key) => !allowed.includes(key)))
+        invalid(path, 'contains unsupported fields');
+      utcTimestamp(capturedAt, path + '.capturedAt');
+      const id =
+        source.id === undefined
+          ? derivedBaselineId(projectId, capturedAt)
+          : uuidValue(source.id, path + '.id');
+      const name =
+        source.name === undefined
+          ? defaultBaselineName(capturedAt)
+          : stringValue(source.name, path + '.name', MAX_BASELINE_NAME, true);
+      if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
+        invalid(path + '.costCurrency', 'expected a supported currency');
+      const ids = makeIdRegistry();
+      const items = requireArray(source.items, path + '.items', MAX_ITEMS).map((record, index) => {
+        const where = path + '.items[' + index + ']';
+        const item = requireRecord(record, where);
+        const { type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
+        if (type !== undefined && type !== 'milestone')
+          invalid(where + '.type', 'must be a milestone or omitted for an activity');
+        const fields =
+          type === 'milestone'
+            ? ['id', 'type', 'start', 'title', 'ref', 'progress', 'values']
+            : ['id', 'start', 'end', 'estimatedCostMinor', 'title', 'ref', 'progress', 'values'];
+        if (Object.keys(item).some((key) => !fields.includes(key)))
+          invalid(where, 'contains unsupported fields');
+        const rowId = ids.add(item.id, where + '.id');
+        if (title !== undefined) stringValue(title, where + '.title', 180, false);
+        refValue(ref, where + '.ref');
+        if (start !== undefined) scaleValue(start, where + '.start');
+        if (end !== undefined) scaleValue(end, where + '.end');
+        if (
+          type === undefined &&
+          ((start === undefined) !== (end === undefined) ||
+            isClock(start) !== isClock(end) ||
+            start > end)
+        )
+          invalid(where, 'expected an ordered range with matching precision or no dates');
+        if (
+          estimatedCostMinor !== undefined &&
+          (!costCurrency || !validEstimatedCost(estimatedCostMinor))
+        )
+          invalid(
+            where + '.estimatedCostMinor',
+            'expected a supported currency and amount in minor units',
+          );
+        if (
+          progress !== undefined &&
+          !(type === 'milestone' ? [0, 100] : [...PROGRESS_VALUES]).includes(progress)
+        )
+          invalid(where + '.progress', 'expected the progress the record could hold');
+        // Captured values may name dimensions and options removed since.
+        if (values !== undefined) {
+          requireRecord(values, where + '.values');
+          if (Object.keys(values).length > MAX_DIMENSIONS)
+            invalid(where + '.values', `at most ${MAX_DIMENSIONS} entries`);
+          for (const [dimensionId, optionId] of Object.entries(values)) {
+            uuidValue(dimensionId, where + '.values');
+            if (optionId !== '') uuidValue(optionId, `${where}.values.${dimensionId}`);
+          }
+        }
+        return baselineItem({ ...item, id: rowId });
+      });
+      return {
+        id,
+        name,
+        capturedAt,
+        ...(costCurrency ? { costCurrency } : {}),
+        items: baselineItems(items),
+      };
+    }
+
+    /** The active snapshot followed by the earlier ones, oldest first. */
+    function baselineEntries(baseline) {
+      if (!baseline) return [];
+      const { earlier = [], ...active } = baseline;
+      return [active, ...earlier];
+    }
+
+    /** The canonical `manifest.baseline` for snapshots and the active ID. */
+    function baselineCollection(entries, activeId) {
+      const active = entries.find((entry) => entry.id === activeId);
+      if (!active) return undefined;
+      const earlier = entries.filter((entry) => entry.id !== activeId).sort(baselineOrder);
+      return { ...active, ...(earlier.length ? { earlier } : {}) };
+    }
+
+    /** The baseline that becomes active when the active one is removed: the newest. */
+    function latestBaseline(entries) {
+      return entries.slice().sort(baselineOrder).at(-1);
+    }
+
+    function normalizeBaseline(value, projectId) {
+      const path = 'manifest.baseline';
+      const source = requireRecord(value, path);
+      const active = normalizeSnapshot(source, path, projectId, false);
+      const earlier =
+        source.earlier === undefined
+          ? []
+          : requireArray(source.earlier, path + '.earlier', MAX_BASELINES - 1).map((entry, index) =>
+              normalizeSnapshot(
+                requireRecord(entry, `${path}.earlier[${index}]`),
+                `${path}.earlier[${index}]`,
+                projectId,
+                true,
+              ),
+            );
+      const entries = [active, ...earlier];
+      const ids = new Set();
+      entries.forEach((entry, index) => {
+        if (ids.has(entry.id))
+          invalid(index ? `${path}.earlier[${index - 1}].id` : `${path}.id`, 'duplicate ID');
+        ids.add(entry.id);
+      });
+      return baselineCollection(entries, active.id);
+    }
+
+    /** A snapshot of every activity and milestone, with their status at capture. */
+    function captureBaseline(project, capturedAt, { id, name } = {}) {
+      const { costCurrency, projectId } = project.manifest;
+      utcTimestamp(capturedAt, 'capturedAt');
+      return {
+        id: id === undefined ? derivedBaselineId(projectId, capturedAt) : uuidValue(id, 'id'),
+        name:
+          name === undefined
+            ? defaultBaselineName(capturedAt)
+            : stringValue(name, 'name', MAX_BASELINE_NAME, true),
+        capturedAt,
+        ...(costCurrency ? { costCurrency } : {}),
+        items: baselineItems(
+          project.items.map((item) => ({
+            ...item,
+            progress: item.progress ?? 0,
+            values: item.values ?? {},
+          })),
+        ),
+      };
+    }
+
+    // Every snapshot's budgets count, so the currency cannot relabel any of them.
+    const hasPlanCosts = (project) =>
+      project.items.some((item) => item.estimatedCostMinor !== undefined) ||
+      baselineEntries(project.manifest.baseline).some((entry) =>
+        entry.items.some((item) => item.estimatedCostMinor !== undefined),
+      );
+
+    function hasTrackingList(project) {
+      return project.sharedViews.some(
+        (view) =>
+          view.view === 'list' &&
+          view.listColumns.some((key) => TRACKING_LIST_COLUMNS.includes(key)),
+      );
+    }
+
+    const screenTrackingFields = (view) =>
+      view?.view === 'timeline'
+        ? view.timelineShowBaseline
+          ? ['baselineDates']
+          : []
+        : view?.view === 'list'
+          ? Array.from(
+              new Set(
+                (view.listColumns || []).flatMap((key) => SCREEN_TRACKING_COLUMNS[key] || []),
+              ),
+            )
+          : [];
+
+    function stripTracking(project, views) {
+      delete project.manifest.baseline;
+      const trackingColumns = new Set(TRACKING_LIST_COLUMNS);
+      for (const view of views) {
+        if (!view) continue;
+        delete view.timelineShowBaseline;
+        for (const key of ['listColumns', 'listColumnOrder'])
+          if (Array.isArray(view[key]))
+            view[key] = view[key].filter((column) => !trackingColumns.has(column));
+        if (trackingColumns.has(view.listSort)) view.listSort = '';
+      }
+    }
+
+    return {
+      MAX_BASELINES,
+      MAX_BASELINE_NAME,
+      SCHEDULE_TRACKING_COLUMNS,
+      COST_TRACKING_COLUMNS,
+      TRACKING_LIST_COLUMNS,
+      SCREEN_TRACKING_COLUMNS,
+      timelineTracking,
+      followUpStatus,
+      trackingVariance,
+      compareBaseline,
+      compareBaselineGroups,
+      derivedBaselineId,
+      defaultBaselineName,
+      baselineEntries,
+      baselineCollection,
+      latestBaseline,
+      normalizeBaseline,
+      captureBaseline,
+      hasPlanCosts,
+      hasTrackingList,
+      screenTrackingFields,
+      stripTracking,
+    };
+  }
+
+  return {
+    MAX_BASELINES,
+    MAX_BASELINE_NAME,
+    SCHEDULE_TRACKING_COLUMNS,
+    COST_TRACKING_COLUMNS,
+    TRACKING_LIST_COLUMNS,
+    SCREEN_TRACKING_COLUMNS,
+    createFactory,
+  };
+});
+
+/*
+ * Dependency validation, overlap thresholds, completion blockers and
+ * fixed-milestone date conflicts for Tidigar's storage model. Pure and
+ * DOM-free.
+ *
+ * When loaded as a script it publishes `globalThis.tidigarProjectDependencies`;
+ * CommonJS consumers receive the same object from
+ * `require('./project-dependencies.js')`.
+ */
+
+(function installProjectDependencies(root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  if (root) root.tidigarProjectDependencies = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function projectDependenciesModule() {
+  'use strict';
+
+  // How far into another activity one may start; 100, after its end, is the
+  // default and is never stored.
+  const START_AFTER_VALUES = new Set([0, 25, 50, 75]);
+
+  function createFactory({ calendar, invalid, requireRecord, requireArray, uuidValue }) {
+    const { DAY, dateTimestamp, dayAfter, isClock, startingAt, timeOf, timeAfter } = calendar;
+
+    function normalizeDependencies(value, path) {
+      if (value === undefined) return [];
+      const dependencies = requireArray(value, path);
+      const seen = new Set();
+      return dependencies.map((dependency, index) => {
+        const dependencyPath = `${path}[${index}]`;
+        const id = uuidValue(dependency, dependencyPath);
+        if (seen.has(id)) invalid(dependencyPath, 'duplicate dependency');
+        seen.add(id);
+        return id;
+      });
+    }
+
+    // The share of another activity that has passed when one may start on it:
+    // an object of predecessor IDs to 0, 25, 50 or 75. An entry outlives no
+    // dependency: one for an ID outside `dependsOn` is dropped.
+    function normalizeStartAfter(value, dependsOn, path) {
+      if (value === undefined) return {};
+      const source = requireRecord(value, path);
+      for (const [id, percent] of Object.entries(source))
+        if (!START_AFTER_VALUES.has(percent))
+          invalid(`${path}.${id}`, 'must be one of 0, 25, 50, or 75');
+      // Entries follow the order of `dependsOn`, so the field has one spelling.
+      return Object.fromEntries(
+        dependsOn.filter((id) => id in source).map((id) => [id, source[id]]),
+      );
+    }
+
+    /**
+     * The first day an activity may start when it waits for `percent` of
+     * `parent`: the day after its end for 100, else the day after that share
+     * of its days, rounded up, has passed. With a work calendar the share is
+     * counted in work days. Dates are UTC midnight timestamps.
+     */
+    function startThreshold(parent, percent = 100, workCal = null) {
+      const start = dateTimestamp(parent.start);
+      const after = dayAfter(parent.end);
+      if (percent >= 100) return after;
+      const length = workCal
+        ? workCal.durationOf(start, after - DAY)
+        : Math.round((after - start) / DAY);
+      const days = Math.ceil((length * percent) / 100);
+      if (!days) return start;
+      const passed = workCal ? workCal.lastWorkDay(start, days) + DAY : start + days * DAY;
+      return Math.min(passed, after);
+    }
+
+    /*
+     * The predecessors that keep a record from being done: each activity or
+     * milestone it waits for until it is done, or an activity until the
+     * share it may start after. A period is time, not work, and never holds
+     * a record back.
+     */
+    function completionBlockers(item, recordsById) {
+      const blockers = [];
+      for (const id of item.dependsOn || []) {
+        const predecessor = recordsById.get(id);
+        if (!predecessor || predecessor.type === 'period') continue;
+        const progress = predecessor.progress ?? 0,
+          required = item.startAfter?.[id] ?? 100;
+        if (progress < required)
+          blockers.push({ id, title: predecessor.title, progress, required });
+      }
+      return blockers;
+    }
+
+    // A merged candidate can supply new dependencies while completion still
+    // starts from the progress stored at the latest revision.
+    function completionDecision(item, recordsById, currentProgress = item.progress ?? 0) {
+      if (currentProgress === 100) return { status: 'already-complete' };
+      const blockers = completionBlockers(item, recordsById);
+      return blockers.length ? { status: 'blocked', blockers } : { status: 'eligible' };
+    }
+
+    // How a record that starts too early after a dependency is told so: by its
+    // unit when both hold dates or both local times.
+    const afterMessage = (value, end, dependency) =>
+      isClock(value) === isClock(end)
+        ? `must be at least one ${isClock(value) ? 'minute' : 'day'} after dependency ${dependency} ends`
+        : `must start after dependency ${dependency} ends`;
+
+    /*
+     * The first moment a record shaped like `like` may start after waiting
+     * for `parent`: a milestone's moment, or the end of an activity or a
+     * period. NaN when the parent holds no date.
+     */
+    function waitsUntil(parent, like) {
+      if (!parent || parent.start === undefined) return NaN;
+      return parent.type === 'milestone'
+        ? startingAt(timeOf(parent.start), like)
+        : startingAt(timeAfter(parent.end), like);
+    }
+
+    /*
+     * One dependency rule for every record: an activity or a milestone may
+     * wait for any other record, a period waits for nothing, and no record
+     * waits for itself through others. A record starts no earlier than each
+     * predecessor's end, or a milestone's moment. A fixed milestone keeps its
+     * date even when a predecessor ends after it: that is a conflict to show
+     * (`dateConflicts`), not an invalid plan.
+     */
+    function validateItemDependencies(items, path = 'items') {
+      const byId = new Map(items.map((item) => [item.id, item]));
+      const visiting = new Set();
+      const visited = new Set();
+      function visit(item) {
+        if (visited.has(item.id)) return;
+        if (visiting.has(item.id)) invalid(`${path}.${item.id}.dependsOn`, 'dependency cycle');
+        visiting.add(item.id);
+        for (const dependency of item.dependsOn || []) {
+          if (!byId.has(dependency))
+            invalid(`${path}.${item.id}.dependsOn`, `unknown record ${dependency}`);
+          visit(byId.get(dependency));
+        }
+        visiting.delete(item.id);
+        visited.add(item.id);
+      }
+      for (const item of items) visit(item);
+
+      // Tidigar dependencies are finish-to-start with one whole unit of the
+      // predecessor, a day or a minute, between records, and a day record
+      // starts at the next midnight; a milestone lets what waits for it start
+      // at its own moment. An activity that starts after part of another
+      // starts no earlier than that one: editors place it by `startThreshold`,
+      // but the stored contract does not depend on the work calendar, so a new
+      // vacation never invalidates a project. Deserialization validates this
+      // contract and never moves user dates as a side effect.
+      for (const item of items) {
+        if (item.type === 'milestone' && item.fixed) continue;
+        for (const dependency of item.dependsOn || []) {
+          const parent = byId.get(dependency);
+          if (item.startAfter?.[dependency] !== undefined) {
+            if (parent.type)
+              invalid(`${path}.${item.id}.startAfter`, `must name an activity, not ${dependency}`);
+            if (item.start === undefined || parent.start === undefined || isClock(parent.start))
+              invalid(`${path}.${item.id}.startAfter`, 'only day records overlap');
+            if (item.start < parent.start)
+              invalid(
+                `${path}.${item.id}.start`,
+                `must not be before dependency ${dependency} starts`,
+              );
+            continue;
+          }
+          if (item.start === undefined || parent.start === undefined) continue;
+          if (timeOf(item.start) < waitsUntil(parent, item.start))
+            invalid(
+              `${path}.${item.id}.start`,
+              parent.type === 'milestone'
+                ? `must not be before ${parent.fixed ? 'fixed ' : ''}milestone ${dependency}`
+                : afterMessage(item.start, parent.end, dependency),
+            );
+        }
+      }
+    }
+
+    /*
+     * The fixed milestones whose date comes before a predecessor allows:
+     * `{ id, dependency }` for each such pair, in item order. The date stays
+     * and the editor shows the conflict.
+     */
+    function dateConflicts(project) {
+      const items = Array.isArray(project?.items) ? project.items : [];
+      const byId = new Map(items.map((item) => [item.id, item]));
+      const conflicts = [];
+      for (const item of items) {
+        if (item.type !== 'milestone' || !item.fixed || item.start === undefined) continue;
+        for (const dependency of item.dependsOn || [])
+          if (timeOf(item.start) < waitsUntil(byId.get(dependency), item.start))
+            conflicts.push({ id: item.id, dependency });
+      }
+      return conflicts;
+    }
+
+    return {
+      START_AFTER_VALUES,
+      normalizeDependencies,
+      normalizeStartAfter,
+      startThreshold,
+      completionBlockers,
+      completionDecision,
+      waitsUntil,
+      validateItemDependencies,
+      dateConflicts,
+    };
+  }
+
+  return { START_AFTER_VALUES, createFactory };
+});
+
+/*
+ * View filter selection, pruning, normalization and activity matching for
+ * Tidigar's storage model. Pure and DOM-free.
+ *
+ * When loaded as a script it publishes `globalThis.tidigarProjectFilters`;
+ * CommonJS consumers receive the same object from
+ * `require('./project-filters.js')`.
+ */
+
+(function installProjectFilters(root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  if (root) root.tidigarProjectFilters = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function projectFiltersModule() {
+  'use strict';
+
+  function createFactory({ invalid, isRecord, PROGRESS_AXIS, PROGRESS_FILTER }) {
+    /**
+     * One view filter as `{ values, exclude }`, or null when it filters
+     * nothing. A filter is stored as one option ID, `""` for none, or
+     * `{ values: [option IDs], exclude: true }` for several values or for all
+     * values but these.
+     */
+    function filterSelection(value) {
+      if (typeof value === 'string') return value ? { values: [value], exclude: false } : null;
+      if (!isRecord(value) || !Array.isArray(value.values)) return null;
+      const values = [...new Set(value.values.filter((id) => typeof id === 'string' && id))];
+      return values.length ? { values, exclude: value.exclude === true } : null;
+    }
+
+    /** The stored form of a filter selection: one included value as its ID. */
+    function filterValue({ values = [], exclude = false } = {}) {
+      if (!values.length) return '';
+      if (!exclude && values.length === 1) return values[0];
+      return exclude ? { values: [...values], exclude: true } : { values: [...values] };
+    }
+
+    /**
+     * Filters of the given dimensions in stored form, each value in its
+     * dimension's order: entries of a missing dimension and values it no
+     * longer holds are dropped, and so is an entry left with no value.
+     */
+    function pruneFilters(filters, dimensions = []) {
+      const result = {};
+      if (!isRecord(filters)) return result;
+      const byId = new Map(
+        [...dimensions, PROGRESS_FILTER].map((dimension) => [dimension.id, dimension]),
+      );
+      for (const [dimensionId, stored] of Object.entries(filters)) {
+        const dimension = byId.get(dimensionId);
+        if (!dimension) continue;
+        const selection = filterSelection(stored);
+        if (!selection) {
+          if (stored === '') result[dimensionId] = '';
+          continue;
+        }
+        const values = dimension.options
+          .map((option) => option.id)
+          .filter((id) => selection.values.includes(id));
+        if (values.length) result[dimensionId] = filterValue({ ...selection, values });
+      }
+      return result;
+    }
+
+    function normalizeFilters(value, context, path) {
+      if (value === undefined || value === null) return {};
+      if (!isRecord(value)) invalid(path, 'expected an object');
+      if (!context.optionByDimension) return {};
+      for (const [dimensionId, stored] of Object.entries(value)) {
+        if (!isRecord(stored)) continue;
+        const where = `${path}.${dimensionId}`;
+        if (!Array.isArray(stored.values)) invalid(`${where}.values`, 'expected an array');
+        if (Object.keys(stored).some((key) => key !== 'values' && key !== 'exclude'))
+          invalid(where, 'only values and exclude are allowed');
+        if (stored.exclude !== undefined && typeof stored.exclude !== 'boolean')
+          invalid(`${where}.exclude`, 'expected a boolean');
+        if (stored.values.length > 100) invalid(`${where}.values`, 'at most 100 values');
+        if (stored.values.some((id) => typeof id !== 'string'))
+          invalid(`${where}.values`, 'expected option IDs');
+      }
+      return pruneFilters(
+        value,
+        [...context.optionByDimension].map(([id, options]) => ({
+          id,
+          options: [...options].map((option) => ({ id: option })),
+        })),
+      );
+    }
+
+    /**
+     * Whether a view shows an activity: every set filter matches, by one of
+     * its values or by none of an exclusion's (a record without a value of
+     * the dimension passes only an exclusion; a progress filter reads a
+     * record without progress as 0), and the
+     * search finds its text in the activity's reference key, title,
+     * description or dimension values. The editor, screens and
+     * screen-link snapshots share this test.
+     */
+    function activityMatcher({ filters = {}, query = '' } = {}, dimensions = [], locale) {
+      const set = Object.entries(filters || {})
+        .map(([dimension, stored]) => [dimension, filterSelection(stored)])
+        .filter(([, selection]) => selection);
+      const search = String(query || '').toLocaleLowerCase(locale);
+      const names = dimensions.map((dimension) => [
+        dimension.id,
+        new Map(dimension.options.map((choice) => [choice.id, choice.name])),
+      ]);
+      return (item) =>
+        set.every(
+          ([dimension, { values, exclude }]) =>
+            values.includes(
+              dimension === PROGRESS_AXIS
+                ? String(item.progress ?? 0)
+                : item.values?.[dimension] || '',
+            ) !== exclude,
+        ) &&
+        (!search ||
+          (
+            (item.ref ? `${item.ref} ` : '') +
+            item.title +
+            ' ' +
+            item.description +
+            ' ' +
+            names.map(([id, options]) => options.get(item.values?.[id]) || '').join(' ')
+          )
+            .toLocaleLowerCase(locale)
+            .includes(search));
+    }
+
+    return {
+      filterSelection,
+      filterValue,
+      pruneFilters,
+      normalizeFilters,
+      activityMatcher,
+    };
+  }
+
+  return { createFactory };
+});
+
+/*
  * Tidigar's storage model.
  *
  * The browser editor and the native adapter use this module as the boundary
@@ -52,14 +1343,42 @@ const scope = { crypto: globalThis.crypto };
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createtidigarModel(root) {
   'use strict';
 
-  const DAY = 86400000;
-  const MINUTE = 60000;
-  const MIN_DATE = '1900-01-01';
-  const MAX_DATE = '2200-12-31';
+  const hasRequire =
+    typeof module === 'object' && module && module.exports && typeof require === 'function';
+  const calendar = hasRequire ? require('./project-calendar.js') : root?.tidigarProjectCalendar;
+  const baselineModule = hasRequire
+    ? require('./project-baseline.js')
+    : root?.tidigarProjectBaseline;
+  const dependenciesModule = hasRequire
+    ? require('./project-dependencies.js')
+    : root?.tidigarProjectDependencies;
+  const filtersModule = hasRequire ? require('./project-filters.js') : root?.tidigarProjectFilters;
+  if (!calendar || !baselineModule || !dependenciesModule || !filtersModule)
+    throw new Error('Missing model sub-module.');
+
+  const {
+    DAY,
+    MINUTE,
+    dateValue,
+    timeScale,
+    isClock,
+    timeOf,
+    timeAfter,
+    scheduledFinish,
+    recordCompletion,
+    startingAt,
+    holdsLocalTimes,
+    valueAt,
+    scaleValue,
+    zoneValue,
+    nightValue,
+    nightMinutes,
+    ensureDateRange,
+    utcTimestamp,
+    workCalendar,
+  } = calendar;
+
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-  const CLOCK_PATTERN = /^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/;
-  const NIGHT_PATTERN = /^(([01]\d|2[0-3]):[0-5]\d)-(([01]\d|2[0-3]):[0-5]\d)$/;
   const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
   const VIEWS = new Set(['grid', 'timeline', 'list', 'flow']);
   const RESOLUTIONS = new Set(['year', 'quarter', 'month', 'week']);
@@ -112,9 +1431,6 @@ const scope = { crypto: globalThis.crypto };
     id: PROGRESS_AXIS,
     options: Object.freeze([...PROGRESS_VALUES].map((value) => ({ id: String(value) }))),
   });
-  // How far into another activity one may start; 100, after its end, is the
-  // default and is never stored.
-  const START_AFTER_VALUES = new Set([0, 25, 50, 75]);
   // Allowed values of enumerated fields, published read-only so the model
   // specification test can compare them with docs/model-spec.md.
   const ENUM_VALUES = Object.freeze({
@@ -189,497 +1505,6 @@ const scope = { crypto: globalThis.crypto };
     if (typeof value !== 'string' || !COLOR_PATTERN.test(value))
       invalid(path, 'expected a six digit hexadecimal color');
     return value;
-  }
-
-  function parseDate(value) {
-    if (typeof value !== 'string' || !DATE_PATTERN.test(value)) return NaN;
-    const timestamp = Date.parse(`${value}T00:00:00Z`);
-    if (!Number.isFinite(timestamp)) return NaN;
-    const canonical = new Date(timestamp).toISOString().slice(0, 10);
-    if (canonical !== value || value < MIN_DATE || value > MAX_DATE) return NaN;
-    return timestamp;
-  }
-
-  function dateValue(value, path) {
-    if (!Number.isFinite(parseDate(value))) invalid(path, 'expected a valid date');
-    return value;
-  }
-
-  // A local wall-clock minute, `YYYY-MM-DDTHH:mm` with no zone, as a
-  // timestamp on the same axis as `parseDate`.
-  function parseClock(value) {
-    if (typeof value !== 'string' || !CLOCK_PATTERN.test(value)) return NaN;
-    return Number.isFinite(parseDate(value.slice(0, 10))) ? Date.parse(`${value}:00Z`) : NaN;
-  }
-
-  /*
-   * A value's precision is its shape: a date is a day and a local time a
-   * minute, in the same fields of one plan. Both read `end` as the last unit
-   * a record occupies, so a successor starts at `end + unit`.
-   */
-  const DAY_SCALE = Object.freeze({
-    precision: 'days',
-    unit: DAY,
-    parse: parseDate,
-    iso: (date) => date.toISOString().slice(0, 10),
-    min: parseDate(MIN_DATE),
-    max: parseDate(MAX_DATE),
-  });
-  const CLOCK_SCALE = Object.freeze({
-    precision: 'clock',
-    unit: MINUTE,
-    parse: parseClock,
-    iso: (date) => date.toISOString().slice(0, 16),
-    min: parseDate(MIN_DATE),
-    max: parseDate(MAX_DATE) + DAY - MINUTE,
-  });
-  /** The scale of a stored value, or of the precision `'clock'` or `'days'`. */
-  function timeScale(value) {
-    return value === 'clock' || (typeof value === 'string' && CLOCK_PATTERN.test(value))
-      ? CLOCK_SCALE
-      : DAY_SCALE;
-  }
-  const isClock = (value) => typeof value === 'string' && CLOCK_PATTERN.test(value);
-  /** A stored value as a timestamp on the shared local axis: a day at 00:00. */
-  const timeOf = (value) => timeScale(value).parse(value);
-  /** The first moment after a record's end, in that record's unit. */
-  const timeAfter = (value) => timeOf(value) + timeScale(value).unit;
-  // A milestone is due at its moment, an activity at its end.
-  const scheduledFinish = (item) => (item?.type === 'milestone' ? item.start : item?.end);
-  // Display intervals use the saved view and only the records it is showing,
-  // against `view.comparedBaseline` when given, else the active baseline.
-  function timelineTracking(project, view, records = project?.items ?? []) {
-    const baseline = new Map();
-    const placements = new Map();
-    const saved = view?.timelineShowBaseline
-      ? new Map(
-          ((view.comparedBaseline ?? project?.manifest.baseline)?.items ?? []).map((row) => [
-            row.id,
-            row,
-          ]),
-        )
-      : new Map();
-    let first = Infinity;
-    let last = -Infinity;
-    let days = false;
-    let clock = false;
-    for (const item of records) {
-      const row = saved.get(item.id);
-      if (!row?.start) continue;
-      baseline.set(item.id, row);
-      const end = row.end ?? row.start;
-      placements.set(item.id, { start: row.start, end });
-      first = Math.min(first, timeOf(row.start));
-      last = Math.max(last, timeAfter(end));
-      days ||= !isClock(row.start) || !isClock(end);
-      clock ||= isClock(row.start) || isClock(end);
-    }
-    const room = days ? DAY : DAY / 24;
-    const range =
-      last >= first
-        ? {
-            start: Math.floor((first - room) / DAY) * DAY,
-            end: Math.ceil((last + room) / DAY) * DAY,
-            clock,
-          }
-        : null;
-    return { baseline, placements, range };
-  }
-  const followUpClocks = new Map();
-  const followUpBaselines = new WeakMap();
-  function baselineFinish(project, id) {
-    const rows = project?.manifest?.baseline?.items;
-    if (!rows) return undefined;
-    if (!followUpBaselines.has(rows))
-      followUpBaselines.set(rows, new Map(rows.map((row) => [row.id, scheduledFinish(row)])));
-    return followUpBaselines.get(rows).get(id);
-  }
-
-  /** Compare the current due date of open and completed work against the saved due date. */
-  function followUpStatus(
-    item,
-    { project, now = Date.now(), timeZone = project?.manifest?.timeZone, baselineDue } = {},
-  ) {
-    const due = scheduledFinish(item);
-    if (Number(item.progress) === 100) {
-      const reference = baselineDue ?? baselineFinish(project, item.id) ?? due;
-      return due && reference && timeOf(due) >= timeAfter(reference) ? 'done-late' : 'done';
-    }
-    if (!due) return 'undated';
-    const localMinute = localFollowUpMinute(now, timeZone);
-    if (timeOf(localMinute) >= timeAfter(due)) return 'overdue';
-    const reference = baselineDue ?? baselineFinish(project, item.id);
-    if (reference && timeOf(due) >= timeAfter(reference)) return 'behind-baseline';
-    return due.slice(0, 10) === localMinute.slice(0, 10) ? 'today' : 'upcoming';
-  }
-
-  function localFollowUpMinute(now, timeZone) {
-    let clock = followUpClocks.get(timeZone);
-    if (!clock) {
-      clock = new Intl.DateTimeFormat('en-GB', {
-        timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hourCycle: 'h23',
-      });
-      followUpClocks.set(timeZone, clock);
-    }
-    const parts = Object.fromEntries(
-      clock.formatToParts(now).map(({ type, value }) => [type, value]),
-    );
-    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-  }
-
-  /** Mark work done on the day, or the local minute for clock work, it reaches 100 %.
-   * Finish (an activity's end, a milestone's moment) becomes now in the plan's time
-   * zone; a later Start moves with it. Undated work and incoming milestones keep
-   * their dates. Return whether a date changed. */
-  function recordCompletion(
-    project,
-    item,
-    previousProgress,
-    { now = Date.now(), timeZone = project?.manifest?.timeZone } = {},
-  ) {
-    if (!item || item.type === 'period' || item.source) return false;
-    if (Number(previousProgress) === 100 || Number(item.progress) !== 100) return false;
-    const due = scheduledFinish(item);
-    if (due === undefined) return false;
-    const minute = localFollowUpMinute(now, timeZone);
-    const value = isClock(due) ? minute : minute.slice(0, 10);
-    if (item.type === 'milestone') {
-      if (item.start === value) return false;
-      item.start = value;
-      return true;
-    }
-    // An activity's dates share one precision.
-    const start = timeOf(item.start) > timeOf(value) ? value : item.start;
-    if (item.end === value && item.start === start) return false;
-    Object.assign(item, { start, end: value });
-    return true;
-  }
-
-  // Only two clock values imply a minute comparison. A day value carries
-  // no time of day, so compare dates using the plan schedule when either side is a day.
-  function scheduleVariance(baseline, value, calendar) {
-    const baselineTime = timeOf(baseline);
-    const comparedTime = timeOf(value);
-    if (!Number.isFinite(baselineTime) || !Number.isFinite(comparedTime)) return null;
-    if (isClock(baseline) && isClock(value))
-      return { unit: 'minutes', value: (comparedTime - baselineTime) / MINUTE };
-    const from = Math.floor(baselineTime / DAY) * DAY;
-    const to = Math.floor(comparedTime / DAY) * DAY;
-    if (!calendar) return { unit: 'days', value: (to - from) / DAY };
-    // Count (earlier, later], so reversing a comparison reverses its sign,
-    // even when an endpoint falls on a weekend or a non-working period.
-    const count = calendar.countWorkDays(Math.min(from, to) + DAY, Math.max(from, to));
-    return { unit: 'work-days', value: count === 0 ? 0 : Math.sign(to - from) * count };
-  }
-
-  const activityField = (item, field) =>
-    item && kindOf(item) === 'activity' ? item[field] : undefined;
-  const trackingCost = (item, field) => {
-    const amount = activityField(item, field);
-    return validEstimatedCost(amount) ? amount : null;
-  };
-
-  function trackingVariance(baseline, start, finish, cost, calendar) {
-    const budget = trackingCost(baseline, 'estimatedCostMinor');
-    return {
-      start: scheduleVariance(activityField(baseline, 'start'), start, calendar),
-      finish: scheduleVariance(scheduledFinish(baseline), finish, calendar),
-      costMinor: budget === null || cost === null ? null : cost - budget,
-    };
-  }
-
-  function summarizeTrackingCosts(amounts) {
-    let totalMinor = 0;
-    let known = 0;
-    for (const amount of amounts) {
-      if (amount === null) continue;
-      totalMinor += amount;
-      known += 1;
-    }
-    return { totalMinor: known ? totalMinor : null, known, eligible: amounts.length };
-  }
-
-  // Work-day plans count variances in the current plan's working days.
-  const trackingCalendar = (project) =>
-    project?.manifest?.schedule === 'work-days'
-      ? workCalendar(project.items.filter((item) => kindOf(item) === 'period'))
-      : null;
-
-  /** Compare baseline and live records in the same plan currency by stable ID. */
-  function compareBaseline(baselineItems, currentItems, project) {
-    const calendar = trackingCalendar(project);
-    const trackedById = (items) =>
-      new Map(items.filter((item) => kindOf(item) !== 'period').map((item) => [item.id, item]));
-    const baselineById = trackedById(baselineItems);
-    const currentById = trackedById(currentItems);
-    const amounts = {
-      baseline: [],
-      current: [],
-      vsCurrent: [],
-    };
-    const rows = [];
-    for (const id of new Set([...currentById.keys(), ...baselineById.keys()])) {
-      const baseline = baselineById.get(id);
-      const current = currentById.get(id);
-      const currentCost = trackingCost(current, 'estimatedCostMinor');
-      const vsCurrent = trackingVariance(
-        baseline,
-        activityField(current, 'start'),
-        scheduledFinish(current),
-        currentCost,
-        calendar,
-      );
-      rows.push({ id, scope: !baseline ? 'added' : !current ? 'removed' : 'retained', vsCurrent });
-
-      const baselineCanCarryCost = baseline && kindOf(baseline) === 'activity';
-      const currentCanCarryCost = current && kindOf(current) === 'activity';
-      if (baselineCanCarryCost) amounts.baseline.push(trackingCost(baseline, 'estimatedCostMinor'));
-      if (currentCanCarryCost) {
-        amounts.current.push(currentCost);
-      }
-      if (baselineCanCarryCost && currentCanCarryCost) amounts.vsCurrent.push(vsCurrent.costMinor);
-    }
-    return {
-      rows,
-      cost: Object.fromEntries(
-        Object.entries(amounts).map(([key, values]) => [key, summarizeTrackingCosts(values)]),
-      ),
-    };
-  }
-
-  // The earliest start and latest finish of records, and their budget or estimate.
-  function trackingSpan(records) {
-    let start, finish;
-    const amounts = [];
-    for (const record of records) {
-      const from = record.start;
-      const to = scheduledFinish(record);
-      if (from !== undefined && (start === undefined || timeOf(from) < timeOf(start))) start = from;
-      if (to !== undefined && (finish === undefined || timeAfter(to) > timeAfter(finish)))
-        finish = to;
-      if (kindOf(record) === 'activity') amounts.push(trackingCost(record, 'estimatedCostMinor'));
-    }
-    return { start, finish, cost: summarizeTrackingCosts(amounts) };
-  }
-
-  function compareSpans(baselineRows, currentRecords, calendar) {
-    const baseline = trackingSpan(baselineRows);
-    const current = trackingSpan(currentRecords);
-    const { totalMinor: budget } = baseline.cost;
-    const { totalMinor: estimate } = current.cost;
-    return {
-      baseline,
-      current,
-      variance: {
-        start: scheduleVariance(baseline.start, current.start, calendar),
-        finish: scheduleVariance(baseline.finish, current.finish, calendar),
-        costMinor: budget === null || estimate === null ? null : estimate - budget,
-      },
-    };
-  }
-
-  /**
-   * Baseline and current totals of a plan and of each group of a dimension.
-   * `records` are the live activities and milestones shown; a baseline row
-   * counts when its live record is shown, and a row whose record was removed
-   * counts when `shown(row)` accepts it. The baseline side groups a row by
-   * its captured `values`; a row without captured status, saved before
-   * baselines held it or imported, follows its live record and is otherwise
-   * in no group. The current side groups live records. `groupOf` groups by
-   * something other than a dimension, such as the assignee: rows then follow
-   * their live records. Each side has its earliest start, latest finish and
-   * budget or estimate with coverage; the variances compare the totals.
-   * A group named by a value no longer in the dimension is `removed`.
-   */
-  function compareBaselineGroups(
-    project,
-    {
-      baseline = project.manifest.baseline,
-      groupBy = '',
-      records = project.items,
-      shown = () => true,
-      groupOf,
-    } = {},
-  ) {
-    const calendar = trackingCalendar(project);
-    const tracked = (list) => list.filter((record) => kindOf(record) !== 'period');
-    const live = new Map(tracked(project.items).map((record) => [record.id, record]));
-    const visible = new Map(tracked(records).map((record) => [record.id, record]));
-    const rows = (baseline?.items ?? []).filter((row) =>
-      live.has(row.id) ? visible.has(row.id) : shown(row),
-    );
-    const total = compareSpans(rows, [...visible.values()], calendar);
-    if (!groupBy) return { total, groups: [] };
-    const valueOf = groupOf ?? ((record) => record.values?.[groupBy] || '');
-    const groups = new Map();
-    const add = (key, side, record) => {
-      if (key === null) return;
-      if (!groups.has(key)) groups.set(key, { baseline: [], current: [] });
-      groups.get(key)[side].push(record);
-    };
-    for (const row of rows) {
-      const record = visible.get(row.id);
-      add(
-        !groupOf && row.progress !== undefined
-          ? row.values?.[groupBy] || ''
-          : record
-            ? valueOf(record)
-            : null,
-        'baseline',
-        row,
-      );
-    }
-    for (const record of visible.values()) add(valueOf(record), 'current', record);
-    const dimension = groupOf
-      ? null
-      : (project.manifest.dimensions ?? []).find(({ id }) => id === groupBy);
-    const options = (dimension?.options ?? []).map(({ id }) => id);
-    const rank = (key) => {
-      const index = options.indexOf(key);
-      return index >= 0 ? index : key === '' ? options.length : options.length + 1;
-    };
-    return {
-      total,
-      groups: [...groups]
-        .sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
-        .map(([id, sides]) => ({
-          id,
-          removed: !groupOf && id !== '' && !options.includes(id),
-          ...compareSpans(sides.baseline, sides.current, calendar),
-        })),
-    };
-  }
-
-  /** The first moment at or after `time` where a record shaped like `like`
-   * may start: a day record starts only at midnight. */
-  const startingAt = (time, like) => (isClock(like) ? time : Math.ceil(time / DAY) * DAY);
-  // The values a plan's records hold: activity starts and milestone moments.
-  const recordTimes = (project) =>
-    (project?.items || []).flatMap((item) =>
-      item.start === undefined || item.type === 'period' ? [] : [item.start],
-    );
-  /** Whether a plan holds any local time; `only` when it holds nothing else. */
-  function holdsLocalTimes(project, { only = false } = {}) {
-    const times = recordTimes(project);
-    return only ? times.length > 0 && times.every(isClock) : times.some(isClock);
-  }
-  /** A timestamp written in the shape of `like`. */
-  const valueAt = (time, like) => timeScale(like).iso(new Date(time));
-
-  function scaleValue(value, path) {
-    if (!Number.isFinite(timeOf(value))) invalid(path, 'expected a valid date or local time');
-    return value;
-  }
-
-  function zoneValue(value, path) {
-    if (typeof value !== 'string' || !value || value.length > 64)
-      invalid(path, 'expected a time zone');
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: value });
-    } catch (_error) {
-      invalid(path, 'expected a named time zone');
-    }
-    return value;
-  }
-
-  // The night a timeline shades at hours: `HH:mm-HH:mm`, local wall-clock
-  // times; a start after the end runs across midnight.
-  function nightValue(value) {
-    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
-    if (!match || match[1] === match[3])
-      invalid('manifest.nightHours', 'expected two different times as HH:mm-HH:mm');
-    return value;
-  }
-
-  /** A night's start and end as minutes of the day, or null for none. */
-  function nightMinutes(value) {
-    const match = typeof value === 'string' && NIGHT_PATTERN.exec(value);
-    if (!match || match[1] === match[3]) return null;
-    const minutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3));
-    return { start: minutes(match[1]), end: minutes(match[3]) };
-  }
-
-  function dateTimestamp(value) {
-    return parseDate(value);
-  }
-
-  function dayAfter(value) {
-    return dateTimestamp(value) + DAY;
-  }
-
-  function ensureDateRange(start, end, path) {
-    dateValue(start, `${path}.start`);
-    dateValue(end, `${path}.end`);
-    if (start > end) invalid(path, 'start must not be after end');
-  }
-
-  /**
-   * The work days of a project: Monday to Friday, except days covered by a
-   * period: every period is time off, such as a vacation. Dates are UTC midnight timestamps. `firstWorkDay` and
-   * `lastWorkDay` may return a day after MAX_DATE, which callers reject.
-   */
-  function workCalendar(periodIndicators = []) {
-    const limit = parseDate(MAX_DATE) + 400 * DAY;
-    // Periods merged into sorted, disjoint [start, end] ranges.
-    const ranges = [];
-    for (const [start, end] of periodIndicators
-      .filter(Boolean)
-      .map((period) => [parseDate(period.start), parseDate(period.end)])
-      .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && start <= end)
-      .sort((left, right) => left[0] - right[0])) {
-      const last = ranges[ranges.length - 1];
-      if (last && start <= last[1] + DAY) last[1] = Math.max(last[1], end);
-      else ranges.push([start, end]);
-    }
-    // The period range that holds `time`, or null.
-    function offWork(time) {
-      let low = 0;
-      let high = ranges.length - 1;
-      while (low <= high) {
-        const middle = (low + high) >> 1;
-        if (time < ranges[middle][0]) high = middle - 1;
-        else if (time > ranges[middle][1]) low = middle + 1;
-        else return ranges[middle];
-      }
-      return null;
-    }
-    const weekend = (time) => {
-      const weekday = new Date(time).getUTCDay();
-      return weekday === 0 || weekday === 6;
-    };
-    const isWorkDay = (time) => !weekend(time) && !offWork(time);
-    function firstWorkDay(time) {
-      let day = time;
-      while (day <= limit) {
-        const range = offWork(day);
-        if (range) day = range[1] + DAY;
-        else if (weekend(day)) day += DAY;
-        else return day;
-      }
-      return day;
-    }
-    /** Work days from `start` through `end`, both included. */
-    function countWorkDays(start, end) {
-      let count = 0;
-      for (let day = firstWorkDay(start); day <= end; day = firstWorkDay(day + DAY)) count += 1;
-      return count;
-    }
-    /** The last day of `duration` work days counted from `start`. */
-    function lastWorkDay(start, duration) {
-      let day = firstWorkDay(start);
-      for (let count = 1; count < duration && day <= limit; count += 1)
-        day = firstWorkDay(day + DAY);
-      return day;
-    }
-    /** An activity's length in work days, read from its dates: at least one. */
-    const durationOf = (start, end) => Math.max(1, countWorkDays(start, end));
-    return { isWorkDay, firstWorkDay, countWorkDays, lastWorkDay, durationOf };
   }
 
   /*
@@ -881,229 +1706,68 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
-  function utcTimestamp(value, path) {
-    if (
-      typeof value !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) ||
-      !Number.isFinite(Date.parse(value)) ||
-      new Date(value).toISOString().replace('.000Z', 'Z') !== value
-    )
-      invalid(path, 'must be a UTC ISO 8601 timestamp with whole seconds');
-    return value;
-  }
+  const {
+    MAX_BASELINES,
+    MAX_BASELINE_NAME,
+    SCHEDULE_TRACKING_COLUMNS,
+    COST_TRACKING_COLUMNS,
+    TRACKING_LIST_COLUMNS,
+    SCREEN_TRACKING_COLUMNS,
+    timelineTracking,
+    followUpStatus,
+    compareBaseline,
+    compareBaselineGroups,
+    derivedBaselineId,
+    defaultBaselineName,
+    baselineEntries,
+    baselineCollection,
+    latestBaseline,
+    normalizeBaseline,
+    captureBaseline,
+    hasPlanCosts,
+    hasTrackingList,
+    screenTrackingFields,
+    stripTracking,
+  } = baselineModule.createFactory({
+    calendar,
+    kindOf,
+    validEstimatedCost,
+    invalid,
+    requireRecord,
+    requireArray,
+    stringValue,
+    uuidValue,
+    makeIdRegistry,
+    refValue,
+    COST_CURRENCIES,
+    PROGRESS_VALUES,
+    MAX_ITEMS,
+    MAX_DIMENSIONS,
+  });
 
-  // A plan keeps at most this many baselines, the active one included.
-  const MAX_BASELINES = 20;
-  const MAX_BASELINE_NAME = 100;
+  const {
+    normalizeDependencies,
+    normalizeStartAfter,
+    startThreshold,
+    completionBlockers,
+    completionDecision,
+    validateItemDependencies,
+    dateConflicts,
+  } = dependenciesModule.createFactory({
+    calendar,
+    invalid,
+    requireRecord,
+    requireArray,
+    uuidValue,
+  });
 
-  function baselineItem(item) {
-    const { id, type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
-    const captured = values && Object.keys(values).sort();
-    return {
-      id,
-      ...(type === 'milestone' ? { type } : {}),
-      ...(title ? { title } : {}),
-      ...(ref ? { ref } : {}),
-      ...(start === undefined ? {} : { start }),
-      ...(end === undefined ? {} : { end }),
-      ...(estimatedCostMinor === undefined ? {} : { estimatedCostMinor }),
-      ...(progress === undefined ? {} : { progress }),
-      ...(captured?.length
-        ? { values: Object.fromEntries(captured.map((key) => [key, values[key]])) }
-        : {}),
-    };
-  }
-
-  function baselineItems(items) {
-    return items
-      .filter((item) => kindOf(item) !== 'period')
-      .map(baselineItem)
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  }
-
-  /* A snapshot saved without an ID, by an earlier version or a command that
-     names none, is identified by its plan and capture second, so every
-     client derives the same ID for it. */
-  function derivedBaselineId(projectId, capturedAt) {
-    const plan = projectId.replace(/-/g, '').toLowerCase();
-    const seconds = Math.floor(Date.parse(capturedAt) / 1000)
-      .toString(16)
-      .padStart(12, '0')
-      .slice(-12);
-    const hex = seconds + '8' + plan.slice(13, 16) + '8' + plan.slice(17);
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  }
-
-  /** The name a baseline gets when none is given: its UTC capture date. */
-  const defaultBaselineName = (capturedAt) => capturedAt.slice(0, 10);
-
-  // A newer snapshot sorts later; equal capture times go by ID.
-  const baselineOrder = (a, b) =>
-    a.capturedAt < b.capturedAt
-      ? -1
-      : a.capturedAt > b.capturedAt
-        ? 1
-        : a.id < b.id
-          ? -1
-          : a.id > b.id
-            ? 1
-            : 0;
-
-  function normalizeSnapshot(source, path, projectId, nested) {
-    const { capturedAt, costCurrency } = source;
-    const allowed = [
-      'id',
-      'name',
-      'capturedAt',
-      'costCurrency',
-      'items',
-      ...(nested ? [] : ['earlier']),
-    ];
-    if (Object.keys(source).some((key) => !allowed.includes(key)))
-      invalid(path, 'contains unsupported fields');
-    utcTimestamp(capturedAt, path + '.capturedAt');
-    const id =
-      source.id === undefined
-        ? derivedBaselineId(projectId, capturedAt)
-        : uuidValue(source.id, path + '.id');
-    const name =
-      source.name === undefined
-        ? defaultBaselineName(capturedAt)
-        : stringValue(source.name, path + '.name', MAX_BASELINE_NAME, true);
-    if (costCurrency !== undefined && !COST_CURRENCIES.includes(costCurrency))
-      invalid(path + '.costCurrency', 'expected a supported currency');
-    const ids = makeIdRegistry();
-    const items = requireArray(source.items, path + '.items', MAX_ITEMS).map((record, index) => {
-      const where = path + '.items[' + index + ']';
-      const item = requireRecord(record, where);
-      const { type, start, end, estimatedCostMinor, title, ref, progress, values } = item;
-      if (type !== undefined && type !== 'milestone')
-        invalid(where + '.type', 'must be a milestone or omitted for an activity');
-      const fields =
-        type === 'milestone'
-          ? ['id', 'type', 'start', 'title', 'ref', 'progress', 'values']
-          : ['id', 'start', 'end', 'estimatedCostMinor', 'title', 'ref', 'progress', 'values'];
-      if (Object.keys(item).some((key) => !fields.includes(key)))
-        invalid(where, 'contains unsupported fields');
-      const rowId = ids.add(item.id, where + '.id');
-      if (title !== undefined) stringValue(title, where + '.title', 180, false);
-      refValue(ref, where + '.ref');
-      if (start !== undefined) scaleValue(start, where + '.start');
-      if (end !== undefined) scaleValue(end, where + '.end');
-      if (
-        type === undefined &&
-        ((start === undefined) !== (end === undefined) ||
-          isClock(start) !== isClock(end) ||
-          start > end)
-      )
-        invalid(where, 'expected an ordered range with matching precision or no dates');
-      if (
-        estimatedCostMinor !== undefined &&
-        (!costCurrency || !validEstimatedCost(estimatedCostMinor))
-      )
-        invalid(
-          where + '.estimatedCostMinor',
-          'expected a supported currency and amount in minor units',
-        );
-      if (
-        progress !== undefined &&
-        !(type === 'milestone' ? [0, 100] : [...PROGRESS_VALUES]).includes(progress)
-      )
-        invalid(where + '.progress', 'expected the progress the record could hold');
-      // Captured values may name dimensions and options removed since.
-      if (values !== undefined) {
-        requireRecord(values, where + '.values');
-        if (Object.keys(values).length > MAX_DIMENSIONS)
-          invalid(where + '.values', `at most ${MAX_DIMENSIONS} entries`);
-        for (const [dimensionId, optionId] of Object.entries(values)) {
-          uuidValue(dimensionId, where + '.values');
-          if (optionId !== '') uuidValue(optionId, `${where}.values.${dimensionId}`);
-        }
-      }
-      return baselineItem({ ...item, id: rowId });
+  const { filterSelection, filterValue, pruneFilters, normalizeFilters, activityMatcher } =
+    filtersModule.createFactory({
+      invalid,
+      isRecord,
+      PROGRESS_AXIS,
+      PROGRESS_FILTER,
     });
-    return {
-      id,
-      name,
-      capturedAt,
-      ...(costCurrency ? { costCurrency } : {}),
-      items: baselineItems(items),
-    };
-  }
-
-  /** The active snapshot followed by the earlier ones, oldest first. */
-  function baselineEntries(baseline) {
-    if (!baseline) return [];
-    const { earlier = [], ...active } = baseline;
-    return [active, ...earlier];
-  }
-
-  /** The canonical `manifest.baseline` for snapshots and the active ID. */
-  function baselineCollection(entries, activeId) {
-    const active = entries.find((entry) => entry.id === activeId);
-    if (!active) return undefined;
-    const earlier = entries.filter((entry) => entry.id !== activeId).sort(baselineOrder);
-    return { ...active, ...(earlier.length ? { earlier } : {}) };
-  }
-
-  /** The baseline that becomes active when the active one is removed: the newest. */
-  function latestBaseline(entries) {
-    return entries.slice().sort(baselineOrder).at(-1);
-  }
-
-  function normalizeBaseline(value, projectId) {
-    const path = 'manifest.baseline';
-    const source = requireRecord(value, path);
-    const active = normalizeSnapshot(source, path, projectId, false);
-    const earlier =
-      source.earlier === undefined
-        ? []
-        : requireArray(source.earlier, path + '.earlier', MAX_BASELINES - 1).map((entry, index) =>
-            normalizeSnapshot(
-              requireRecord(entry, `${path}.earlier[${index}]`),
-              `${path}.earlier[${index}]`,
-              projectId,
-              true,
-            ),
-          );
-    const entries = [active, ...earlier];
-    const ids = new Set();
-    entries.forEach((entry, index) => {
-      if (ids.has(entry.id))
-        invalid(index ? `${path}.earlier[${index - 1}].id` : `${path}.id`, 'duplicate ID');
-      ids.add(entry.id);
-    });
-    return baselineCollection(entries, active.id);
-  }
-
-  /** A snapshot of every activity and milestone, with their status at capture. */
-  function captureBaseline(project, capturedAt, { id, name } = {}) {
-    const { costCurrency, projectId } = project.manifest;
-    utcTimestamp(capturedAt, 'capturedAt');
-    return {
-      id: id === undefined ? derivedBaselineId(projectId, capturedAt) : uuidValue(id, 'id'),
-      name:
-        name === undefined
-          ? defaultBaselineName(capturedAt)
-          : stringValue(name, 'name', MAX_BASELINE_NAME, true),
-      capturedAt,
-      ...(costCurrency ? { costCurrency } : {}),
-      items: baselineItems(
-        project.items.map((item) => ({
-          ...item,
-          progress: item.progress ?? 0,
-          values: item.values ?? {},
-        })),
-      ),
-    };
-  }
-
-  // Every snapshot's budgets count, so the currency cannot relabel any of them.
-  const hasPlanCosts = (project) =>
-    project.items.some((item) => item.estimatedCostMinor !== undefined) ||
-    baselineEntries(project.manifest.baseline).some((entry) =>
-      entry.items.some((item) => item.estimatedCostMinor !== undefined),
-    );
 
   function normalizeManifest(value, registry = makeIdRegistry()) {
     const source = requireRecord(value, 'manifest');
@@ -1198,176 +1862,6 @@ const scope = { crypto: globalThis.crypto };
       values[dimensionId] = optionId;
     }
     return values;
-  }
-
-  function normalizeDependencies(value, path) {
-    if (value === undefined) return [];
-    const dependencies = requireArray(value, path);
-    const seen = new Set();
-    return dependencies.map((dependency, index) => {
-      const dependencyPath = `${path}[${index}]`;
-      const id = uuidValue(dependency, dependencyPath);
-      if (seen.has(id)) invalid(dependencyPath, 'duplicate dependency');
-      seen.add(id);
-      return id;
-    });
-  }
-
-  // The share of another activity that has passed when one may start on it:
-  // an object of predecessor IDs to 0, 25, 50 or 75. An entry outlives no
-  // dependency: one for an ID outside `dependsOn` is dropped.
-  function normalizeStartAfter(value, dependsOn, path) {
-    if (value === undefined) return {};
-    const source = requireRecord(value, path);
-    for (const [id, percent] of Object.entries(source))
-      if (!START_AFTER_VALUES.has(percent))
-        invalid(`${path}.${id}`, 'must be one of 0, 25, 50, or 75');
-    // Entries follow the order of `dependsOn`, so the field has one spelling.
-    return Object.fromEntries(dependsOn.filter((id) => id in source).map((id) => [id, source[id]]));
-  }
-
-  /**
-   * The first day an activity may start when it waits for `percent` of
-   * `parent`: the day after its end for 100, else the day after that share
-   * of its days, rounded up, has passed. With a work calendar the share is
-   * counted in work days. Dates are UTC midnight timestamps.
-   */
-  function startThreshold(parent, percent = 100, calendar = null) {
-    const start = dateTimestamp(parent.start);
-    const after = dayAfter(parent.end);
-    if (percent >= 100) return after;
-    const length = calendar
-      ? calendar.durationOf(start, after - DAY)
-      : Math.round((after - start) / DAY);
-    const days = Math.ceil((length * percent) / 100);
-    if (!days) return start;
-    const passed = calendar ? calendar.lastWorkDay(start, days) + DAY : start + days * DAY;
-    return Math.min(passed, after);
-  }
-
-  /*
-   * The predecessors that keep a record from being done: each activity or
-   * milestone it waits for until it is done, or an activity until the
-   * share it may start after. A period is time, not work, and never holds
-   * a record back.
-   */
-  function completionBlockers(item, recordsById) {
-    const blockers = [];
-    for (const id of item.dependsOn || []) {
-      const predecessor = recordsById.get(id);
-      if (!predecessor || predecessor.type === 'period') continue;
-      const progress = predecessor.progress ?? 0,
-        required = item.startAfter?.[id] ?? 100;
-      if (progress < required) blockers.push({ id, title: predecessor.title, progress, required });
-    }
-    return blockers;
-  }
-
-  // A merged candidate can supply new dependencies while completion still
-  // starts from the progress stored at the latest revision.
-  function completionDecision(item, recordsById, currentProgress = item.progress ?? 0) {
-    if (currentProgress === 100) return { status: 'already-complete' };
-    const blockers = completionBlockers(item, recordsById);
-    return blockers.length ? { status: 'blocked', blockers } : { status: 'eligible' };
-  }
-
-  // How a record that starts too early after a dependency is told so: by its
-  // unit when both hold dates or both local times.
-  const afterMessage = (value, end, dependency) =>
-    isClock(value) === isClock(end)
-      ? `must be at least one ${isClock(value) ? 'minute' : 'day'} after dependency ${dependency} ends`
-      : `must start after dependency ${dependency} ends`;
-
-  /*
-   * The first moment a record shaped like `like` may start after waiting
-   * for `parent`: a milestone's moment, or the end of an activity or a
-   * period. NaN when the parent holds no date.
-   */
-  function waitsUntil(parent, like) {
-    if (!parent || parent.start === undefined) return NaN;
-    return parent.type === 'milestone'
-      ? startingAt(timeOf(parent.start), like)
-      : startingAt(timeAfter(parent.end), like);
-  }
-
-  /*
-   * One dependency rule for every record: an activity or a milestone may
-   * wait for any other record, a period waits for nothing, and no record
-   * waits for itself through others. A record starts no earlier than each
-   * predecessor's end, or a milestone's moment. A fixed milestone keeps its
-   * date even when a predecessor ends after it: that is a conflict to show
-   * (`dateConflicts`), not an invalid plan.
-   */
-  function validateItemDependencies(items, path = 'items') {
-    const byId = new Map(items.map((item) => [item.id, item]));
-    const visiting = new Set();
-    const visited = new Set();
-    function visit(item) {
-      if (visited.has(item.id)) return;
-      if (visiting.has(item.id)) invalid(`${path}.${item.id}.dependsOn`, 'dependency cycle');
-      visiting.add(item.id);
-      for (const dependency of item.dependsOn || []) {
-        if (!byId.has(dependency))
-          invalid(`${path}.${item.id}.dependsOn`, `unknown record ${dependency}`);
-        visit(byId.get(dependency));
-      }
-      visiting.delete(item.id);
-      visited.add(item.id);
-    }
-    for (const item of items) visit(item);
-
-    // Tidigar dependencies are finish-to-start with one whole unit of the
-    // predecessor, a day or a minute, between records, and a day record
-    // starts at the next midnight; a milestone lets what waits for it start
-    // at its own moment. An activity that starts after part of another
-    // starts no earlier than that one: editors place it by `startThreshold`,
-    // but the stored contract does not depend on the work calendar, so a new
-    // vacation never invalidates a project. Deserialization validates this
-    // contract and never moves user dates as a side effect.
-    for (const item of items) {
-      if (item.type === 'milestone' && item.fixed) continue;
-      for (const dependency of item.dependsOn || []) {
-        const parent = byId.get(dependency);
-        if (item.startAfter?.[dependency] !== undefined) {
-          if (parent.type)
-            invalid(`${path}.${item.id}.startAfter`, `must name an activity, not ${dependency}`);
-          if (item.start === undefined || parent.start === undefined || isClock(parent.start))
-            invalid(`${path}.${item.id}.startAfter`, 'only day records overlap');
-          if (item.start < parent.start)
-            invalid(
-              `${path}.${item.id}.start`,
-              `must not be before dependency ${dependency} starts`,
-            );
-          continue;
-        }
-        if (item.start === undefined || parent.start === undefined) continue;
-        if (timeOf(item.start) < waitsUntil(parent, item.start))
-          invalid(
-            `${path}.${item.id}.start`,
-            parent.type === 'milestone'
-              ? `must not be before ${parent.fixed ? 'fixed ' : ''}milestone ${dependency}`
-              : afterMessage(item.start, parent.end, dependency),
-          );
-      }
-    }
-  }
-
-  /*
-   * The fixed milestones whose date comes before a predecessor allows:
-   * `{ id, dependency }` for each such pair, in item order. The date stays
-   * and the editor shows the conflict.
-   */
-  function dateConflicts(project) {
-    const items = Array.isArray(project?.items) ? project.items : [];
-    const byId = new Map(items.map((item) => [item.id, item]));
-    const conflicts = [];
-    for (const item of items) {
-      if (item.type !== 'milestone' || !item.fixed || item.start === undefined) continue;
-      for (const dependency of item.dependsOn || [])
-        if (timeOf(item.start) < waitsUntil(byId.get(dependency), item.start))
-          conflicts.push({ id: item.id, dependency });
-    }
-    return conflicts;
   }
 
   /*
@@ -1616,79 +2110,7 @@ const scope = { crypto: globalThis.crypto };
     return result;
   }
 
-  /**
-   * One view filter as `{ values, exclude }`, or null when it filters
-   * nothing. A filter is stored as one option ID, `""` for none, or
-   * `{ values: [option IDs], exclude: true }` for several values or for all
-   * values but these.
-   */
-  function filterSelection(value) {
-    if (typeof value === 'string') return value ? { values: [value], exclude: false } : null;
-    if (!isRecord(value) || !Array.isArray(value.values)) return null;
-    const values = [...new Set(value.values.filter((id) => typeof id === 'string' && id))];
-    return values.length ? { values, exclude: value.exclude === true } : null;
-  }
-
-  /** The stored form of a filter selection: one included value as its ID. */
-  function filterValue({ values = [], exclude = false } = {}) {
-    if (!values.length) return '';
-    if (!exclude && values.length === 1) return values[0];
-    return exclude ? { values: [...values], exclude: true } : { values: [...values] };
-  }
-
-  /**
-   * Filters of the given dimensions in stored form, each value in its
-   * dimension's order: entries of a missing dimension and values it no
-   * longer holds are dropped, and so is an entry left with no value.
-   */
-  function pruneFilters(filters, dimensions = []) {
-    const result = {};
-    if (!isRecord(filters)) return result;
-    const byId = new Map(
-      [...dimensions, PROGRESS_FILTER].map((dimension) => [dimension.id, dimension]),
-    );
-    for (const [dimensionId, stored] of Object.entries(filters)) {
-      const dimension = byId.get(dimensionId);
-      if (!dimension) continue;
-      const selection = filterSelection(stored);
-      if (!selection) {
-        if (stored === '') result[dimensionId] = '';
-        continue;
-      }
-      const values = dimension.options
-        .map((option) => option.id)
-        .filter((id) => selection.values.includes(id));
-      if (values.length) result[dimensionId] = filterValue({ ...selection, values });
-    }
-    return result;
-  }
-
-  function normalizeFilters(value, context, path) {
-    if (value === undefined || value === null) return {};
-    if (!isRecord(value)) invalid(path, 'expected an object');
-    if (!context.optionByDimension) return {};
-    for (const [dimensionId, stored] of Object.entries(value)) {
-      if (!isRecord(stored)) continue;
-      const where = `${path}.${dimensionId}`;
-      if (!Array.isArray(stored.values)) invalid(`${where}.values`, 'expected an array');
-      if (Object.keys(stored).some((key) => key !== 'values' && key !== 'exclude'))
-        invalid(where, 'only values and exclude are allowed');
-      if (stored.exclude !== undefined && typeof stored.exclude !== 'boolean')
-        invalid(`${where}.exclude`, 'expected a boolean');
-      if (stored.values.length > 100) invalid(`${where}.values`, 'at most 100 values');
-      if (stored.values.some((id) => typeof id !== 'string'))
-        invalid(`${where}.values`, 'expected option IDs');
-    }
-    return pruneFilters(
-      value,
-      [...context.optionByDimension].map(([id, options]) => ({
-        id,
-        options: [...options].map((option) => ({ id: option })),
-      })),
-    );
-  }
-
-  function normalizeColumns(value, fallback, validKeys, path) {
+  function normalizeColumns(value, fallback, validKeys, _path) {
     if (value === undefined) return fallback.slice();
     if (!Array.isArray(value)) return fallback.slice();
     const seen = new Set();
@@ -1701,52 +2123,6 @@ const scope = { crypto: globalThis.crypto };
     return columns;
   }
 
-  const SCHEDULE_TRACKING_COLUMNS = Object.freeze([
-    'baselineStart',
-    'currentStart',
-    'currentStartVariance',
-    'baselineFinish',
-    'currentFinish',
-    'currentFinishVariance',
-  ]);
-  const COST_TRACKING_COLUMNS = Object.freeze([
-    'budgetMinor',
-    'currentEstimateMinor',
-    'currentCostVarianceMinor',
-  ]);
-  const TRACKING_LIST_COLUMNS = Object.freeze([
-    ...SCHEDULE_TRACKING_COLUMNS,
-    ...COST_TRACKING_COLUMNS,
-  ]);
-  function hasTrackingList(project) {
-    return project.sharedViews.some(
-      (view) =>
-        view.view === 'list' && view.listColumns.some((key) => TRACKING_LIST_COLUMNS.includes(key)),
-    );
-  }
-
-  // A public List may keep the underlying values needed by visible variances.
-  const SCREEN_TRACKING_COLUMNS = Object.freeze({
-    baselineStart: ['baselineDates'],
-    currentStart: [],
-    currentStartVariance: ['baselineDates'],
-    baselineFinish: ['baselineDates'],
-    currentFinish: [],
-    currentFinishVariance: ['baselineDates'],
-    budgetMinor: ['baselineCost'],
-    currentEstimateMinor: [],
-    currentCostVarianceMinor: ['baselineCost'],
-  });
-  const screenTrackingFields = (view) =>
-    view?.view === 'timeline'
-      ? view.timelineShowBaseline
-        ? ['baselineDates']
-        : []
-      : view?.view === 'list'
-        ? Array.from(
-            new Set((view.listColumns || []).flatMap((key) => SCREEN_TRACKING_COLUMNS[key] || [])),
-          )
-        : [];
   const LIST_COLUMN_KEYS = Object.freeze([
     'title',
     'duration',
@@ -2156,46 +2532,6 @@ const scope = { crypto: globalThis.crypto };
     });
   }
 
-  /**
-   * Whether a view shows an activity: every set filter matches, by one of
-   * its values or by none of an exclusion's (a record without a value of
-   * the dimension passes only an exclusion; a progress filter reads a
-   * record without progress as 0), and the
-   * search finds its text in the activity's reference key, title,
-   * description or dimension values. The editor, screens and
-   * screen-link snapshots share this test.
-   */
-  function activityMatcher({ filters = {}, query = '' } = {}, dimensions = [], locale) {
-    const set = Object.entries(filters || {})
-      .map(([dimension, stored]) => [dimension, filterSelection(stored)])
-      .filter(([, selection]) => selection);
-    const search = String(query || '').toLocaleLowerCase(locale);
-    const names = dimensions.map((dimension) => [
-      dimension.id,
-      new Map(dimension.options.map((choice) => [choice.id, choice.name])),
-    ]);
-    return (item) =>
-      set.every(
-        ([dimension, { values, exclude }]) =>
-          values.includes(
-            dimension === PROGRESS_AXIS
-              ? String(item.progress ?? 0)
-              : item.values?.[dimension] || '',
-          ) !== exclude,
-      ) &&
-      (!search ||
-        (
-          (item.ref ? `${item.ref} ` : '') +
-          item.title +
-          ' ' +
-          item.description +
-          ' ' +
-          names.map(([id, options]) => options.get(item.values?.[id]) || '').join(' ')
-        )
-          .toLocaleLowerCase(locale)
-          .includes(search));
-  }
-
   /** JSON encode a normalized complete project. */
   function serializeProject(project) {
     return JSON.stringify(normalizeProject(project));
@@ -2260,19 +2596,6 @@ const scope = { crypto: globalThis.crypto };
     const matches = recordId ? records.filter((record) => record.id === recordId) : records;
     if (matches.length !== 1) invalid(path, 'must identify exactly one record');
     return matches[0];
-  }
-
-  function stripTracking(project, views) {
-    delete project.manifest.baseline;
-    const trackingColumns = new Set(TRACKING_LIST_COLUMNS);
-    for (const view of views) {
-      if (!view) continue;
-      delete view.timelineShowBaseline;
-      for (const key of ['listColumns', 'listColumnOrder'])
-        if (Array.isArray(view[key]))
-          view[key] = view[key].filter((column) => !trackingColumns.has(column));
-      if (trackingColumns.has(view.listSort)) view.listSort = '';
-    }
   }
 
   /** Project a hosted or file plan onto the fields supported by calendar storage. */
@@ -4340,7 +4663,7 @@ const scope = { crypto: globalThis.crypto };
 
   const VERSION = 1;
   const TRACKING_VERSION = 2;
-  const hasTracking = (payload) => payload?.b !== undefined || payload?.x !== undefined;
+  const hasTracking = (payload) => payload?.b !== undefined;
   // The band color a period's packed form carries, for older readers.
   const PERIOD_COLOR = '9aa7b5';
   // The whole link stays within 2,000 characters for any Tidigar origin and
@@ -5759,8 +6082,8 @@ const scope = { crypto: globalThis.crypto };
       `height="480" style="border:0;max-width:100%" loading="lazy"></iframe>\n` +
       `<p><a href="${escapeHTML(href)}">${escapeHTML(linkText)}</a></p>\n` +
       // Sets the iframe to the height of its roadmap; without it the height
-      // above applies. The escaped slash keeps this source inline in HTML.
-      `<script async src="${escapeHTML(embedURL)}embed.js"><\/script>`
+      // above applies. Split closing tag keeps this source inline in HTML.
+      `<script async src="${escapeHTML(embedURL)}embed.js"><${'/'}script>`
     );
   }
 

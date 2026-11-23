@@ -126,8 +126,8 @@ save. Offer a separate copy only if the user wants one.
 
 ## Activities as tickets
 
-For Business and Server, the [Agent work template](https://tidigar.com/examples/agent-work)
-includes a progress Board and backlog List.
+For Business and Server, a plan can work as a ticket list: give it a reference
+key prefix, a progress Board and a backlog List of undated work.
 
 1. Resume with `tidigar_list_my_activities`. Search with `tidigar_list_activities`
    by plan and `ref` or across readable plans with `all: true`. For unassigned

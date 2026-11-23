@@ -142,8 +142,6 @@ input or corrections to review. The script runs locally.
   remote MCP, delegated OAuth connection and safe updates for chat assistants.
 - [Examples](https://tidigar.com/agents/example_sharelink.md): a larger plan,
   its optional JSON representation and a link change.
-- [llms-full.txt](https://tidigar.com/llms-full.txt): this guide and its
-  references in one file; read it instead of fetching them separately.
 - [Example roadmaps](https://tidigar.com/examples/): plans to start from.
 - [Roadmaps in Markdown](https://tidigar.com/agents/docs/markdown.md),
   [embed stories](https://tidigar.com/agents/docs/stories.md) and
