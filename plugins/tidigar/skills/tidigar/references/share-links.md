@@ -15,14 +15,17 @@ The roadmap model, its field rules and limits are defined in the
 ## Link format
 
 ```text
-https://open.tidigar.com/s#t=1~<record>~<record>~…~!
+https://open.tidigar.com/s#t=1;<record>;<record>;…;e
 ```
 
-Links open in the web app or in an installed Tidigar app that claims the link.
-Until the opener is deployed, use `https://app.tidigar.com/#t=1~…` for the web app.
+Links open in the web app or in an installed Tidigar app that claims the link
+(and also work on `/t#t=1;…;e` for Christmas tree, `/d#t=1;…;e` for Drive, and
+`https://embed.tidigar.com/#t=1;…;e` for embeds).
+Until the opener is deployed, use `https://app.tidigar.com/#t=1;…;e` for the web app.
 
-- The fragment starts with `t=1` or `t=2`. Records follow, each after a `~`, as
-  `key=value` or a one-letter flag, in any order. `!` ends the link.
+- The fragment starts with `t=1` or `t=2`. Records follow, each after a `;`, as
+  `key=value` or a one-letter flag, in any order. `;e` ends the link (`;end` is
+  also accepted leniently).
 - The whole link SHOULD stay within **2,000 characters**: the fragment within
   **1,900**. Share larger roadmaps as project files.
 - Browsers keep the fragment on the device when requesting the page.
@@ -38,11 +41,11 @@ Until the opener is deployed, use `https://app.tidigar.com/#t=1~…` for the web
 | `u=thousands`           | display costs in thousands                                    |
 | `k=SEK`                 | the plan currency for estimated costs, when present           |
 | `r=KEY`                 | the reference key prefix, up to 10 capital letters and digits |
-| `m1=Team:Design,Build`  | a dimension and its options, in order                         |
-| `a1=title/start/days/…` | an activity                                                   |
-| `s1=title/date/…`       | a milestone                                                   |
-| `p1=title/start/days`   | a period                                                      |
-| `v=timeline/…`          | the view the roadmap opens in                                 |
+| `m1=Team:Design+Build`  | a dimension and its options, in order                         |
+| `a1=title,start,days,…` | an activity                                                   |
+| `s1=title,date,…`       | a milestone                                                   |
+| `p1=title,start,days`   | a period                                                      |
+| `v=timeline,…`          | the view the roadmap opens in                                 |
 | `c=3.1.1`               | the number of activities, milestones and periods              |
 
 Numbered records count from 1: `a1`, `a2`, … A link MUST NOT skip a number,
@@ -51,31 +54,34 @@ and `c=` MUST give the counts, so a missing record or a cut link is noticed.
 ### Activities
 
 ```text
-a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
+a3=Install_new_unit,11-02,5,Installer+Install,a=a2+s2,50p,d=Ask_for_permits
 ```
 
 - **Title**, then **start** (`MM-DD` always uses `y`; `YYYY-MM-DD` can use
-  any year), then **days** (`1` for a single day). Work-day plans skip
-  weekends and periods. For undated work use `-/-` for start and days,
-  as in `a1=Request_quotes/-/-`.
+  any year), then **days** (`1` for a single day) or an inclusive **end date**
+  (`MM-DD` or `YYYY-MM-DD`, e.g. `03-13`). Work-day plans skip weekends and
+  periods. For undated work use `-,-` for start and days, as in
+  `a1=Request_quotes,-,-`.
 - Then, in any order:
-  - **Options** by name, comma-separated, one per dimension in `m1`, `m2`, …
+  - **Options** by name, `+`-separated, one per dimension in `m1`, `m2`, …
     order. When a name belongs to several dimensions, its position selects
-    the dimension: with `m1=Team:Network,Servers` and
-    `m2=Phase:Inventory,Network`, `Network,Network` sets both Team and Phase
-    to Network. Empty positions are allowed: `,Network` sets only Phase.
+    the dimension: with `m1=Team:Network+Servers` and
+    `m2=Phase:Inventory+Network`, `Network+Network` sets both Team and Phase
+    to Network. Empty positions are allowed: `+Network` sets only Phase.
     Unique names also work in any order. To select a dimension explicitly,
     write `Team:Network` or `Phase:Network`; the prefix takes priority over
     position. If a shared name does not match its position, Tidigar reports
     the ambiguity and uses the first matching dimension.
-  - **Dependencies** after `@`, comma-separated, by key, such as
-    `@a1,s2,p1`. The activity starts after each ends, or on a milestone's date; `@a1:50` lets it start once 50% of `a1`'s planned days have
-    passed (`0`, `25`, `50` or `75`). Links involving undated activities
-    preserve dependency order without constraining dates or allowing overlap
-    shares. Dependencies MUST NOT form a cycle.
-  - **Estimated cost** as `cost=1250000` in the currency’s minor units. Set
-    the plan currency with `k=SEK` (also supports EUR, USD, GBP, NOK and DKK).
-    Omit the field for an unestimated activity.
+  - **Dependencies** after `a=`, `+`-separated, by key, such as
+    `a=a1+s2+p1` (`after=` is accepted leniently). The activity starts after
+    each ends, or on a milestone's date; `a=a1:50` lets it start once 50% of
+    `a1`'s planned days have passed (`0`, `25`, `50` or `75`). Links involving
+    undated activities preserve dependency order without constraining dates or
+    allowing overlap shares. Dependencies MUST NOT form a cycle.
+  - **Estimated cost** as `c=1250000` (`cost=1250000` accepted leniently) in
+    the currency’s minor units. Set the plan currency with `k=SEK` (also
+    supports EUR, USD, GBP, NOK and DKK). Omit the field for an unestimated
+    activity.
   - **Progress** as `0p`, `25p`, `50p`, `75p` or `100p`. An option whose
     name looks like this is written with its dimension, such as `Size:50p`.
   - `d=` carries the activity's [Markdown source](https://tidigar.com/agents/docs/file-format.md#item-activity).
@@ -85,41 +91,46 @@ a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2/50p/d=Ask_for_permits
 ### Milestones and periods
 
 ```text
-s1=Heat_pump_in_operation/11-09/@a3
-s2=Contract_signed/10-30/fixed
-p1=Autumn_break/10-26/5
+s1=Heat_pump_in_operation,11-09,a=a3
+s2=Contract_signed,10-30,f
+p1=Autumn_break,10-26,5
 ```
 
-- A milestone has a title and a date, or `-`, then `@` and what it waits
-  for; `fixed` marks an event on a set date, such as a decision.
+- A milestone has a title and a date, or `-`, then `a=` and what it waits
+  for; `f` marks an event on a set date (`fixed` accepted leniently), such as a
+  decision.
 - A period is a titled band across the timeline, such as a holiday: title,
-  start and days. It is time off, without work days.
+  start and days (or inclusive end date). It is time off, without work days.
 
 ### Dimensions and the view
 
-- `m1=Team:Household,Installer` defines ordered options with standard colors.
+- `m1=Team:Household+Installer` defines ordered options with standard colors.
 - `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names and
-  dates, as in `v=timeline/color:Team/group:Phase/start:10-01/end:12-31`.
-  Board uses `rows:` and `columns:`. Add `costs` to show totals, with optional
-  List grouping as in `v=list/costs/cost-group:Team`.
+  dates, as in `v=timeline,color:Team,group:Phase,start:10-01,end:12-31` (and
+  `sum:Phase`, alias `summarize:`, for timeline summarization). Board uses
+  `rows:` and `columns:`. Add `costs` to show totals, with optional List
+  grouping as in `v=list,costs,cost-group:Team`.
 - Timeline layout is `classic` (one activity per row, fixed labels and reference
   keys) or `compact` (shared rows). Styles are `minimal`, `airy`, `contrast`
   and `terminal`. A layout or style alone selects the timeline, as in `v=classic`.
 
-Use `progress` for rows or columns and `@progress` or `@follow-up-status`
-for color. Links omit assignee settings.
+Use `progress` for rows or columns and `color:progress` or
+`color:follow-up-status` for color (`@` is also accepted leniently). Links omit
+assignee settings.
 
 ### Text
 
 - `_` is a space.
-- In a title, a note or a name, write these characters escaped: `~` `%7E`,
-  `/` `%2F`, `_` `%5F`, `%` `%25`, `&` `%26`, `#` `%23`, `(` `%28`, `)`
-  `%29`, `"` `%22`, `<` `%3C`, `>` `%3E`, backtick `%60`, `{` `%7B`,
-  `}` `%7D`, `[` `%5B`, `]` `%5D`, vertical bar `%7C`, backslash `%5C`
-  and `^` `%5E`. Encode a line feed as `%0A`, a carriage return as `%0D`
-  and a tab as `%09`. In a dimension or option name also escape `,` `%2C`,
-  `:` `%3A`, `@` `%40` and `=` `%3D`.
-- Other characters, such as å, ä, ö or `–`, are written as they are.
+- In a title, a note or a name, UTF-8 percent-encode all unsafe/Markdown
+  characters (`%` `%25`, `~` `%7E`, `;` `%3B`, `/` `%2F`, `,` `%2C`, `+` `%2B`,
+  `_` `%5F`, `&` `%26`, `#` `%23`, `"` `%22`, `'` `%27`, `<` `%3C`, `>` `%3E`,
+  backtick `%60`, `(` `%28`, `)` `%29`, `{` `%7B`, `}` `%7D`, `[` `%5B`, `]`
+  `%5D`, vertical bar `%7C`, backslash `%5C`, `^` `%5E`, `*` `%2A`, `!` `%21`,
+  `?` `%3F`, `@` `%40`, `$` `%24`, line feed `%0A`, carriage return `%0D`, tab
+  `%09`) AND all non-ASCII characters (such as `å` `%C3%A5`, `ä` `%C3%A4`,
+  `ö` `%C3%B6`, `–` `%E2%80%93`) so emitted URLs are pure RFC 3986 ASCII
+  (`A-Za-z0-9-_.;,+:=%`). In a dimension or option name also escape `:` `%3A`
+  and `=` `%3D`. On read, raw non-ASCII is still decoded leniently.
 - Titles are up to 180 characters, names up to 100, the roadmap's description
   up to 500.
 
@@ -127,15 +138,15 @@ for color. Links omit assignee settings.
 
 Use `t=2` for a readable link with a baseline. Its other
 records follow the same grammar as version 1. Tracking fields are
-separated with `/` and write missing values as `-`.
+separated with `,` and write missing values as `-`.
 
-- `b=<UTC capture timestamp>/<currency or ->` starts a baseline. It may
+- `b=<UTC capture timestamp>,<currency or ->` starts a baseline. It may
   have no rows.
-- `b1=<work key or historical UUID>/<activity or milestone>/<start>/<end>/<budget>`
+- `b1=<work key or historical UUID>,<activity or milestone>,<start>,<end>,<budget>`
   records one baseline row. Repeat as `b2`, `b3` and so on. The removed
   work's UUID stands in for a work key. Milestones put their planned
   moment in start and leave the end and budget absent. Append optional
-  `/<title>/<ref>` fields for the captured strings. A missing title before a
+  `,<title>,<ref>` fields for the captured strings. A missing title before a
   reference key is `-`. Encode the literal string `-` as `%2D` in either
   field, and use the same text escapes as other readable fields.
 
@@ -155,7 +166,7 @@ actual or forecast values; a reader ignores older `x` records and the
 ## Example
 
 ```text
-https://open.tidigar.com/s#t=1~n=Heat_pump_replacement~y=2026~w~m1=Team:Household,Installer~m2=Phase:Plan,Install~a1=Review_current_system/10-12/3/Household,Plan~a2=Request_quotes/10-15/6/Household,Plan/@a1~a3=Install_new_unit/11-02/5/Installer,Install/@a2,s2~s1=Heat_pump_in_operation/11-09/@a3~s2=Contract_signed/10-30/fixed~p1=Autumn_break/10-26/5~v=timeline/color:Team/group:Phase~c=3.2.1~!
+https://open.tidigar.com/s#t=1;n=Heat_pump_replacement;y=2026;w;m1=Team:Household+Installer;m2=Phase:Plan+Install;a1=Review_current_system,10-12,3,Household+Plan;a2=Request_quotes,10-15,6,Household+Plan,a=a1;a3=Install_new_unit,11-02,5,Installer+Install,a=a2+s2;s1=Heat_pump_in_operation,11-09,a=a3;s2=Contract_signed,10-30,f;p1=Autumn_break,10-26,5;v=timeline,color:Team,group:Phase;c=3.2.1;e
 ```
 
 Installation waits for quotes and the signed contract. The work-day timeline

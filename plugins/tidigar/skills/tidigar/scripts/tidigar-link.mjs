@@ -5,13 +5,15 @@
 
      node tidigar-link.mjs plan.json           build a link from a plan
      node tidigar-link.mjs - < plan.json       the same, from standard input
+     node tidigar-link.mjs --tree plan.json    build a Christmas tree link (/t)
+     node tidigar-link.mjs --drive plan.json   build a Drive link (/d)
      node tidigar-link.mjs --embed plan.json   also print embed code
      node tidigar-link.mjs --validate "<link>"  check a finished link without rewriting it
      node tidigar-link.mjs --read "<link>" > plan.json   read a link as a plan
 
    Or import it: createLink(plan), readLink(link), embedCode(link, title).
    A plan has real dates and names (schema/plan-v1.json); the link is a
-   readable one, `#t=1~…`. It validates a roadmap with the same code Tidigar
+   readable one, `#t=1;…;e`. It validates a roadmap with the same code Tidigar
    uses when it opens a link, so a link it returns opens. Nothing is sent
    anywhere. */
 
@@ -3965,12 +3967,13 @@ const scope = { crypto: globalThis.crypto };
 });
 })(scope);
 (function (globalThis) {
-/* Readable share links (`t=1~…`) that an AI agent writes by hand, without
- * code: records separated by `~`, referring to each other by key (`a3`,
- * `s1`) and to options and dimensions by name. Reading one gives the payload
- * of a compact link, with positions, day offsets and option numbers, for the
- * share-link reader to unpack, and a sentence for each problem, naming the
- * record. Records stand alone, so one mistake stays in its record. Pure.
+/* Readable share links (`t=1;…;e`) that an AI agent writes by hand, without
+ * code: records separated by `;`, fields by `,`, lists by `+`, referring to
+ * each other by key (`a3`, `s1`) and to options and dimensions by name.
+ * Reading one gives the payload of a compact link, with positions, day offsets
+ * and option numbers, for the share-link reader to unpack, and a sentence for
+ * each problem, naming the record. Records stand alone, so one mistake stays
+ * in its record. Pure.
  */
 (function installReadableLink(root, factory) {
   const api = factory();
@@ -3990,14 +3993,17 @@ const scope = { crypto: globalThis.crypto };
     columns: 'col',
     color: 'color',
     group: 'group',
+    sum: 'timelineSummarizeBy',
     'cost-group': 'listCostGroup',
   };
+  const VIEW_AXIS_ALIASES = { summarize: 'timelineSummarizeBy' };
   const KINDS = { a: 'activity', s: 'milestone', p: 'period' };
   // Words for how a timeline looks: `classic` is one activity per row under
   // a fixed label, as in MS Project, and opens in the Classic saved view a
   // new plan has; `compact` lets activities share rows; then the styles.
   const LAYOUTS = { classic: 'single-label', compact: 'compact' };
   const STYLES = ['minimal', 'airy', 'contrast', 'terminal'];
+  const DATE_PATTERN = /^(?:\d{4}-)?\d{2}-\d{2}$/;
 
   const isReadable = (fragment) => /^#?t=/.test(String(fragment ?? ''));
   const same = (left, right) =>
@@ -4029,7 +4035,7 @@ const scope = { crypto: globalThis.crypto };
       failures.push(`${where}: ${message}`);
       return null;
     };
-    const records = String(fragment).replace(/^#/, '').split('~');
+    const records = String(fragment).replace(/^#/, '').split(';');
     const head = records.shift();
     const tracking = head === 't=2';
     if (head !== `t=${VERSION}` && !tracking)
@@ -4047,9 +4053,9 @@ const scope = { crypto: globalThis.crypto };
     let last = 't';
     for (const [position, record] of records.entries()) {
       if (record === '') continue;
-      if (record === '!') {
+      if (record === 'e' || record === 'end') {
         ended = true;
-        if (position !== records.length - 1) note('!', 'records after the end mark were read too');
+        if (position !== records.length - 1) note('e', 'records after the end mark were read too');
         continue;
       }
       const match = /^([a-z])(\d*)(?:=(.*))?$/s.exec(record);
@@ -4071,7 +4077,7 @@ const scope = { crypto: globalThis.crypto };
         else fields.set(key, value);
       } else note(key, 'is not a record Tidigar knows and was ignored');
     }
-    if (!ended) note('!', `the link has no end mark; it may have been cut after ${last}`);
+    if (!ended) note('e', `the link has no end mark; it may have been cut after ${last}`);
 
     // Records in key order: a1, a2, … a10.
     const ordered = (map, letter) =>
@@ -4098,7 +4104,7 @@ const scope = { crypto: globalThis.crypto };
     // The year: given, or the first full date's, or this year.
     let year = Number(fields.get('y'));
     if (!Number.isInteger(year) || year < 1900 || year > 2200) {
-      const found = /(?:^|[/~=])((?:19|20|21|22)\d\d)-\d\d-\d\d/.exec(records.join('~'))?.[1];
+      const found = /(?:^|[,;=])((?:19|20|21|22)\d\d)-\d\d-\d\d/.exec(records.join(';'))?.[1];
       const fallback = found ? Number(found) : new Date().getUTCFullYear();
       note(
         'y',
@@ -4141,16 +4147,16 @@ const scope = { crypto: globalThis.crypto };
       return days;
     };
 
-    // Dimensions: `Team:Household,Installer`.
+    // Dimensions: `Team:Household+Installer`.
     payload.m = dimensions.map(({ key, value }) => {
       const colon = value.indexOf(':');
       if (colon < 0) {
-        failAt(key, 'expected Name:Option,Option');
+        failAt(key, 'expected Name:Option+Option');
         return [text(value), []];
       }
       const options = value
         .slice(colon + 1)
-        .split(',')
+        .split('+')
         .map(text)
         .filter((name) => name.trim());
       return [
@@ -4164,7 +4170,7 @@ const scope = { crypto: globalThis.crypto };
     // Option names, one per dimension, as option numbers in dimension order.
     const valuesOf = (list, where) => {
       const values = dimensionList.map(() => 0);
-      for (const [slot, raw] of list.split(',').entries()) {
+      for (const [slot, raw] of list.split('+').entries()) {
         if (!raw.trim()) continue;
         const colon = raw.indexOf(':');
         const named = colon < 0 ? null : text(raw.slice(0, colon));
@@ -4180,7 +4186,7 @@ const scope = { crypto: globalThis.crypto };
           note(where, `no dimension has the option ${JSON.stringify(name)}; it was left empty`);
           continue;
         }
-        // Shared names follow the comma-separated dimension positions.
+        // Shared names follow the `+`-separated dimension positions.
         // Unique names still work out of order; explicit names take priority.
         const positional = named === null && matches.find(([index]) => index === slot);
         if (matches.length > 1 && !positional)
@@ -4218,13 +4224,13 @@ const scope = { crypto: globalThis.crypto };
         return failAt(where, 'unknown record ' + value);
       };
       if (fields.has('b')) {
-        const header = fields.get('b').split('/');
+        const header = fields.get('b').split(',');
         if (header.length !== 2) failAt('b', 'expected capture time and currency');
         payload.b = [
           header[0],
           time(header[1]),
           ordered(lists.b, 'b').map(({ key, value }) => {
-            const fields = value.split('/');
+            const fields = value.split(',');
             if (fields.length < 5 || fields.length > 7)
               return failAt(
                 key,
@@ -4247,11 +4253,11 @@ const scope = { crypto: globalThis.crypto };
       } else if (lists.b.size) failAt('b', 'the baseline rows need a capture record');
       if (!payload.b) failAt('t', 'version 2 needs baseline data');
     }
-    // `@a1,a4,s2,a1:50`: predecessor indices and their start-after shares.
+    // `a=a1+a4+s2+a1:50`: predecessor indices and their start-after shares.
     const dependenciesOf = (list, where) => {
       const indices = [];
       const shares = [];
-      for (const part of list.split(',')) {
+      for (const part of list.split('+')) {
         const [key, share] = part.trim().split(':');
         if (!key) continue;
         const index = recordIndex.get(key);
@@ -4266,18 +4272,20 @@ const scope = { crypto: globalThis.crypto };
       return [indices, shares];
     };
 
-    // Periods: `title/start/days`, time off such as a vacation.
+    // Periods: `title,start,days_or_end`, time off such as a vacation.
     payload.p = periods.map(({ key, value }) => {
-      const [title = '', start = '', days = '', ...rest] = value.split('/');
+      const [title = '', start = '', span = '', ...rest] = value.split(',');
       for (const field of rest)
         if (field) note(key, `${JSON.stringify(field)} is not a period field and was ignored`);
-      return [
-        text(title),
-        dayOf(start, key, 'start') ?? 0,
-        (daysOf(days, key) ?? 1) - 1,
-        PERIOD_COLOR,
-        1,
-      ];
+      const first = dayOf(start, key, 'start') ?? 0;
+      let length = 0;
+      if (DATE_PATTERN.test(span.trim())) {
+        const end = dayOf(span, key, 'end');
+        if (end !== null && end < first)
+          failAt(key, `end ${JSON.stringify(span)} is before start ${JSON.stringify(start)}`);
+        else if (end !== null) length = end - first;
+      } else length = (daysOf(span, key) ?? 1) - 1;
+      return [text(title), first, length, PERIOD_COLOR, 1];
     });
     // The days after an activity's start to its end: calendar days, or with
     // `w` work days, skipping weekends and periods.
@@ -4300,10 +4308,10 @@ const scope = { crypto: globalThis.crypto };
       }
       return day - first;
     };
-    // Activities: `title/start/days`, then options, `@dependencies`,
-    // progress such as `50p` and a description `d=` in any order.
+    // Activities: `title,start,days_or_end`, then options, `a=dependencies`,
+    // progress such as `50p`, cost `c=` and a description `d=` in any order.
     payload.i = activities.map(({ key, value }) => {
-      const [title = '', start = '', days = '', ...rest] = value.split('/');
+      const [title = '', start = '', span = '', ...rest] = value.split(',');
       const where = key;
       let values = [];
       let dependencies = [[], []];
@@ -4313,22 +4321,35 @@ const scope = { crypto: globalThis.crypto };
       for (const field of rest) {
         if (!field) continue;
         if (field.startsWith('d=')) description = text(field.slice(2));
-        else if (field.startsWith('cost=')) {
-          const amount = field.slice(5);
+        else if (field.startsWith('c=') || field.startsWith('cost=')) {
+          const amount = field.startsWith('c=') ? field.slice(2) : field.slice(5);
           if (!/^\d+$/.test(amount)) failAt(where, 'cost must be an integer in minor units');
           else cost = Number(amount);
-        } else if (field.startsWith('@')) dependencies = dependenciesOf(field.slice(1), where);
+        } else if (field.startsWith('a=') || field.startsWith('after='))
+          dependencies = dependenciesOf(
+            field.startsWith('a=') ? field.slice(2) : field.slice(6),
+            where,
+          );
         else if (/^\d+p$/.test(field)) progress = Number(field.slice(0, -1));
         // As people write it by hand.
         else if (/^\d+(%|%25)$/.test(field)) progress = Number(field.replace(/%.*/, ''));
         else values = valuesOf(field, where);
       }
-      const undated = start === '-' && days === '-';
-      const first = undated ? null : (dayOf(start, where, 'start') ?? 0);
+      const undated = start === '-' && span === '-';
+      const first = undated ? null : dayOf(start, where, 'start');
+      let length = null;
+      if (!undated) {
+        if (DATE_PATTERN.test(span.trim())) {
+          const end = dayOf(span, where, 'end');
+          if (end !== null && first !== null && end < first)
+            failAt(where, `end ${JSON.stringify(span)} is before start ${JSON.stringify(start)}`);
+          else length = end === null || first === null ? 0 : end - first;
+        } else length = lengthOf(first ?? 0, daysOf(span, where) ?? 1);
+      }
       return [
         text(title),
-        first,
-        undated ? null : lengthOf(first, daysOf(days, where) ?? 1),
+        undated ? null : (first ?? 0),
+        length,
         description,
         progress,
         values,
@@ -4337,14 +4358,15 @@ const scope = { crypto: globalThis.crypto };
         ...(cost === null ? [] : ['', cost]),
       ];
     });
-    // Milestones: `title/date`, `-` for none, then `@dependencies` and `fixed`.
+    // Milestones: `title,date`, `-` for none, then `a=dependencies` and `f`.
     payload.s = milestones.map(({ key, value }) => {
-      const [title = '', date = '', ...rest] = value.split('/');
+      const [title = '', date = '', ...rest] = value.split(',');
       let dependsOn = [];
       let fixed = 0;
       for (const field of rest) {
-        if (field === 'fixed') fixed = 1;
-        else if (field.startsWith('@')) [dependsOn] = dependenciesOf(field.slice(1), key);
+        if (field === 'f' || field === 'fixed') fixed = 1;
+        else if (field.startsWith('a=') || field.startsWith('after='))
+          [dependsOn] = dependenciesOf(field.startsWith('a=') ? field.slice(2) : field.slice(6), key);
         else if (field)
           note(key, `${JSON.stringify(field)} is not a milestone field and was ignored`);
       }
@@ -4352,11 +4374,11 @@ const scope = { crypto: globalThis.crypto };
     });
     for (const key of ['i', 's', 'p']) if (!payload[key].length) delete payload[key];
 
-    // The initial view: `timeline/classic/rows:Team/color:Phase`; a layout
+    // The initial view: `timeline,classic,rows:Team,color:Phase`; a layout
     // word alone means a timeline.
     let classic = !fields.has('v');
     if (fields.has('v')) {
-      const [mode, ...settings] = fields.get('v').split('/');
+      const [mode, ...settings] = fields.get('v').split(',');
       const view = {};
       const word = mode.trim().toLowerCase();
       if (VIEWS[word]) view.view = VIEWS[word];
@@ -4393,17 +4415,20 @@ const scope = { crypto: globalThis.crypto };
               .slice(0, 10);
           continue;
         }
-        const field = VIEW_AXES[axis];
+        const field = VIEW_AXES[axis] ?? VIEW_AXIS_ALIASES[axis];
         const index = dimensionList.findIndex(([dimension]) => same(dimension, text(name)));
         if (!field)
           note(
             'v',
-            `${JSON.stringify(axis)} is not classic, compact, costs, a style, rows, columns, color, group, cost-group, start or end`,
+            `${JSON.stringify(axis)} is not classic, compact, costs, a style, rows, columns, color, group, sum, cost-group, start or end`,
           );
-        else if (field === 'color' && name === '@follow-up-status')
+        else if (
+          field === 'color' &&
+          (name === 'follow-up-status' || name === '@follow-up-status')
+        )
           view[field] = 'follow-up-status';
         else if (
-          (field === 'color' && name === '@progress') ||
+          (field === 'color' && (name === 'progress' || name === '@progress')) ||
           (['row', 'col'].includes(field) && name === 'progress')
         )
           view[field] = 'progress';
@@ -4458,9 +4483,10 @@ const scope = { crypto: globalThis.crypto };
     };
   }
 
-  /* Text in a field: a space is `_`. What would end or split a field, and
-     what a chat or a Markdown link would break on, is escaped. */
-  const ESCAPED = new Set('%~/_&#"<>`(){}[]|\\^');
+  /* Text in a field: a space is `_`. What would end or split a field, what a
+     chat, Markdown parser or iOS URL handler would break on, and all non-ASCII
+     characters are percent-encoded so every emitted URL is pure RFC 3986 ASCII. */
+  const ESCAPED = new Set('%~;/,+_&#"<>`(){}[]|\\^*!\'?@$');
   const field = (value, also = '') =>
     [...String(value)]
       .map((character) =>
@@ -4468,6 +4494,7 @@ const scope = { crypto: globalThis.crypto };
           ? '_'
           : ESCAPED.has(character) ||
               also.includes(character) ||
+              character.codePointAt(0) > 0x7f ||
               /[\s\x00-\x1f\x7f]/.test(character)
             ? encodeURIComponent(character).replace(
                 /^[^%]$/,
@@ -4476,10 +4503,10 @@ const scope = { crypto: globalThis.crypto };
             : character,
       )
       .join('');
-  const name = (value) => field(value, ',:@=');
+  const name = (value) => field(value, ':=');
 
   /**
-   * Write a valid compact payload as a readable fragment, `t=1~…~!`, for a
+   * Write a valid compact payload as a readable fragment, `t=1;…;e`, for a
    * builder that has validated the roadmap. Colors are left out.
    */
   function write(payload) {
@@ -4529,7 +4556,7 @@ const scope = { crypto: globalThis.crypto };
     if (payload.r) records.push(`r=${field(payload.r)}`);
     dimensions.forEach(([dimension, options], index) =>
       records.push(
-        `m${index + 1}=${name(dimension)}:${options.map(([option]) => name(option)).join(',')}`,
+        `m${index + 1}=${name(dimension)}:${options.map(([option]) => name(option)).join('+')}`,
       ),
     );
     items.forEach(
@@ -4562,42 +4589,42 @@ const scope = { crypto: globalThis.crypto };
               : name(option);
           })
           .filter(Boolean);
-        if (options.length) fields.push(options.join(','));
+        if (options.length) fields.push(options.join('+'));
         if (dependsOn.length)
           fields.push(
-            `@${dependsOn
+            `a=${dependsOn
               .map((predecessor, position) =>
                 (parts[position] ?? 100) === 100
                   ? keyOf(predecessor)
                   : `${keyOf(predecessor)}:${parts[position]}`,
               )
-              .join(',')}`,
+              .join('+')}`,
           );
         if (progress) fields.push(`${progress}p`);
-        if (cost != null) fields.push(`cost=${cost}`);
+        if (cost != null) fields.push(`c=${cost}`);
         if (description) fields.push(`d=${field(description)}`);
-        records.push(`a${index + 1}=${fields.join('/')}`);
+        records.push(`a${index + 1}=${fields.join(',')}`);
       },
     );
     milestones.forEach(([title, day, dependsOn = [], fixed = 0], index) => {
       const fields = [field(title), day === null ? '-' : date(day)];
-      if (fixed === 1) fields.push('fixed');
-      if (dependsOn.length) fields.push(`@${dependsOn.map(keyOf).join(',')}`);
-      records.push(`s${index + 1}=${fields.join('/')}`);
+      if (fixed === 1) fields.push('f');
+      if (dependsOn.length) fields.push(`a=${dependsOn.map(keyOf).join('+')}`);
+      records.push(`s${index + 1}=${fields.join(',')}`);
     });
     periods.forEach(([title, start, length], index) =>
-      records.push(`p${index + 1}=${field(title)}/${date(start)}/${length + 1}`),
+      records.push(`p${index + 1}=${field(title)},${date(start)},${length + 1}`),
     );
     if (payload.b) {
       const [capturedAt, currency, baseline] = payload.b;
-      records.push(`b=${capturedAt}/${currency ?? '-'}`);
+      records.push(`b=${capturedAt},${currency ?? '-'}`);
       for (const [index, [id, type, start, end, cost, title, ref]] of baseline.entries()) {
         const target = typeof id === 'number' ? keyOf(id) : id;
         const row = [target, type ?? 'activity', start ?? '-', end ?? '-', cost ?? '-'];
         const label = (value) => (value === '-' ? '%2D' : field(value));
         if (title != null || ref != null) row.push(title == null ? '-' : label(title));
         if (ref != null) row.push(label(ref));
-        records.push(`b${index + 1}=${row.join('/')}`);
+        records.push(`b${index + 1}=${row.join(',')}`);
       }
     }
     if (payload.o) {
@@ -4615,23 +4642,25 @@ const scope = { crypto: globalThis.crypto };
       if (STYLES.includes(view.presentationStyle)) settings.push(view.presentationStyle);
       for (const [axis, key] of Object.entries(VIEW_AXES)) {
         if (key === 'color' && view[key] === 'follow-up-status')
-          settings.push('color:@follow-up-status');
-        else if (view[key] === 'progress')
-          settings.push(`${axis}:${key === 'color' ? '@' : ''}progress`);
+          settings.push('color:follow-up-status');
+        else if (view[key] === 'progress') settings.push(`${axis}:progress`);
         else if (Number.isInteger(view[key])) {
           const dimension = name(dimensions[view[key]][0]);
+          const needsEscape =
+            (dimension === 'progress' && (key === 'color' || key === 'row' || key === 'col')) ||
+            (dimension === 'follow-up-status' && key === 'color');
           settings.push(
-            `${axis}:${dimension === 'progress' && key !== 'color' ? '%70rogress' : dimension}`,
+            `${axis}:${needsEscape ? `%${dimension.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}${dimension.slice(1)}` : dimension}`,
           );
         }
       }
       const offset = (iso) => Date.parse(`${iso}T00:00:00Z`) / DAY - base;
       if (view.timelineStart) settings.push(`start:${date(offset(view.timelineStart))}`);
       if (view.timelineEnd) settings.push(`end:${date(offset(view.timelineEnd))}`);
-      records.push(`v=${settings.join('/')}`);
+      records.push(`v=${settings.join(',')}`);
     }
-    records.push(`c=${items.length}.${milestones.length}.${periods.length}`, '!');
-    return records.join('~');
+    records.push(`c=${items.length}.${milestones.length}.${periods.length}`, 'e');
+    return records.join(';');
   }
 
   /* A message about a payload's records (`activity i[2] "Build"`) in the
@@ -6809,15 +6838,23 @@ function fragmentOf(link) {
   return (hash < 0 ? text : text.slice(hash + 1)).split('&')[0];
 }
 
+const OPENER_PATHS = {
+  share: OPENER_URL,
+  tree: OPENER_URL.replace(/\/s$/, '/t'),
+  drive: OPENER_URL.replace(/\/s$/, '/d'),
+};
+
 /**
  * Validate a plan and build its link. Returns `{ url, fragment, length,
  * limit, summary }`, where `length` is the fragment's length against
- * `limit`, `MAX_FRAGMENT_LENGTH`. Throws an error whose message names the
+ * `limit`, `MAX_FRAGMENT_LENGTH`. Pass `{ mode: 'tree' | 'drive' }` for
+ * Christmas tree or Drive links. Throws an error whose message names the
  * broken rule and the record, such as `activities[2] "Build"`.
  */
-export function createLink(plan) {
+export function createLink(plan, { mode = 'share' } = {}) {
   if (typeof plan === 'string') plan = JSON.parse(plan);
   if (!planFormat.isPlan(plan)) throw new Error('Give a plan: see tidigar.com/llms.txt.');
+  const baseUrl = OPENER_PATHS[mode] ?? OPENER_URL;
   let project, view;
   try {
     ({ project, view } = codec.unpack(planFormat.toPayload(plan)));
@@ -6830,7 +6867,7 @@ export function createLink(plan) {
       `The roadmap is too large for a link. It needs ${fragment.length} of ${MAX_FRAGMENT_LENGTH} characters; shorten titles, drop descriptions and merge small activities.`,
     );
   return {
-    url: `${OPENER_URL}#${fragment}`,
+    url: `${baseUrl}#${fragment}`,
     fragment,
     length: fragment.length,
     limit: MAX_FRAGMENT_LENGTH,
@@ -6839,13 +6876,13 @@ export function createLink(plan) {
 }
 
 /**
- * Read a readable Tidigar link (`#t=1~…`), or its fragment, into `{ plan,
+ * Read a readable Tidigar link (`#t=1;…;e`), or its fragment, into `{ plan,
  * summary, corrections }`: the roadmap as a plan to edit and build again,
  * and what Tidigar would correct when opening it.
  */
 export function readLink(link) {
   const fragment = fragmentOf(link);
-  if (!readable.isReadable(fragment)) throw new Error('Give a readable Tidigar link, #t=1~….');
+  if (!readable.isReadable(fragment)) throw new Error('Give a readable Tidigar link, #t=1;…;e.');
   const { project, view, corrections = [] } = reader.decodeSync(fragment);
   const { plan } = planFormat.fromPayload(codec.pack(project, view));
   return { plan, summary: describe(project, PLAN_LABELS), corrections };
@@ -6891,7 +6928,8 @@ async function main(args) {
   if (input === '-') for await (const chunk of process.stdin) text += chunk;
   else text = await readFile(input, 'utf8');
   const plan = JSON.parse(text);
-  const link = createLink(plan);
+  const mode = flags.has('--tree') ? 'tree' : flags.has('--drive') ? 'drive' : 'share';
+  const link = createLink(plan, { mode });
   console.log(link.url);
   console.log(`\n${link.summary}`);
   console.log(`\nFragment: ${link.length} of ${link.limit} characters.`);

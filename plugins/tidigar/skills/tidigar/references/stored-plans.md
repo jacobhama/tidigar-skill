@@ -5,7 +5,7 @@ Tidigar or Tidigar Server, or gives a `/p/<code>` link. A public chat
 assistant uses remote MCP with delegated OAuth authorization. The user's
 consent grants access; reading this guide or installing the skill does not.
 
-A stored plan is the original shared project. A `#t=1~…~!` link is an
+A stored plan is the original shared project. A `#s=…` or `#t=1;…;e` link is an
 independent copy. Do not replace a requested save or update with a share link.
 If the destination is unclear, ask whether the user means the stored original
 or a separate copy before writing.
@@ -13,11 +13,10 @@ or a separate copy before writing.
 ## Connect through remote MCP
 
 1. Discover the Tidigar tools available in the assistant's host, including tools
-   that the host loads on demand. If `tidigar_status` is available, call it with
-   no arguments. Check its `server`, `organization`, `scope`, `role` and
-   `writable` against the request. Proceed with a write only when `writable`
-   is true; otherwise follow the access-failure guidance below. Do not infer
-   authorization from a plan URL.
+   that the host loads on demand. Call `tidigar_list_plans` with no arguments to
+   inspect `server`, `organization`, `scope`, `role`, `writable` and existing
+   plans. Proceed with a write only when `writable` is true; otherwise follow
+   the access-failure guidance below. Do not infer authorization from a plan URL.
 2. If no Tidigar connection exists, use the host's connector setup flow when it
    supports connecting during the conversation. Otherwise guide the user to add
    an MCP connection in the assistant's app or connector settings. The address
@@ -27,199 +26,90 @@ or a separate copy before writing.
 3. Let the host's MCP client handle OAuth discovery and authorization. It opens
    Tidigar for the user to sign in, check the assistant's name and return
    address, choose the organisation, and approve **Read only** or **Read and
-   write**. Request writing only when the task changes stored data. Consent must come
-   from the user, never from the agent acting on their behalf.
+   write**. Request writing only when the task changes stored data. Consent must
+   come from the user, never from the agent acting on their behalf.
 4. After authorization completes, discover the tools again and call
-   `tidigar_status`. Resume the original task after checking the organisation
-   and effective access. Each connection reaches one organisation. If it is the
-   wrong one, have the user select or authorize the correct connection.
+   `tidigar_list_plans`. Call `tidigar_guide` any time you want the full domain
+   model or step-by-step workflow recipes.
 
 The host keeps access and refresh tokens outside the conversation. Never ask
 for personal tokens, passwords or OAuth codes in chat, and never put them in
-prompts, files or shell commands. Do not replace this flow with the CLI,
-`TIDIGAR_TOKEN` or direct API calls. Coding agents with separately configured
+prompts, files or shell commands. Coding agents with separately configured
 credentials use the [CLI and HTTP reference](https://tidigar.com/agents/stored-plans-cli.md).
 
-Instructions cannot install MCP tools in a host that has no connector support.
-If connection is unavailable, declined or fails, explain the connection step
-that remains and that no stored change was made. Continue after the host makes
-the authorized tools available; do not claim access or simulate a successful
-save. Offer a separate copy only if the user wants one.
+## Create and edit plans
 
-## Find and read the original
+- **Start with a shell (recommended for screenshots, voice, and new plans):**
+  call `tidigar_create_plan` with `{ plan: { name, dimensions?, workDays? } }`
+  to get the plan `id`, `revision` and live `url` immediately.
+- **Populate and edit incrementally:** call `tidigar_edit_plan` with `id` and
+  only the dimensions, activities, milestones, periods, dependencies (by `key`,
+  `title`, `ref` or ID) or view settings you want to add, update or remove.
+  Soft issues (such as a successor starting on the same day its predecessor ends
+  or non-25% progress values) are adjusted automatically and returned in
+  `adjustments`; dependency cycles and unknown references are rejected.
+- **Read a plan:** call `tidigar_get_plan` with `id`. By default it returns a
+  compact, human-readable plan view (`format: "readable"`). Pass `format: "raw"`
+  only if you need the canonical `tidigar-project` JSON.
+- **Delete or restore:** confirm by plan name first, then call
+  `tidigar_delete_plan` with `action: "delete"`, `id` and `revision` (moves to
+  30-day trash). List trash with `tidigar_list_plans({ includeTrash: true })`
+  and recover with `tidigar_delete_plan({ action: "restore", id })`.
 
-1. Call `tidigar_list_plans` with no arguments. For a `/p/<code>` link, match
-   its URL to a returned plan's `url`, ignoring query and fragment. The code is
-   not the plan ID. For a title, select the matching plan; ask if several match.
-   If nothing matches, report it and check the intended organisation with the
-   user. Do not guess an ID or search another organisation without access.
-2. Call `tidigar_get_plan` with that `id`. Keep the returned `id`, `revision`
-   and complete `project` for the update. Check its identity against the request.
-3. Edit only the requested part of `project`. Preserve its project ID, record
-   IDs, dimensions, saved views and unrelated content; new records need new
-   UUIDs. Use the [roadmap file format](https://tidigar.com/agents/docs/file-format.md)
-   for the fields you edit. Never rebuild an existing project from simplified
-   plan JSON or a share link: that would lose its identities and views.
-   An item's `assignee` is the organisation's member number for a person,
-   not an account: keep it as read and assign with `tidigar_assign_activity`.
+## Baselines and status reports
 
-## Validate and save the change
+Use `tidigar_baseline` with `action: "create" | "activate" | "delete"`, `id`
+and `revision`. Pass `name` for a named baseline, or omit `name` on the first
+baseline to also create a Follow-up List view. `baselineId` and `capturedAt`
+are optional on creation.
 
-1. Call `tidigar_validate_plan` with the edited `project`. It stores nothing.
-   Compare its normalized `project` and `summary` to the user's request and fix
-   validation errors before saving. Keep the original read revision.
-2. Call `tidigar_update_plan` with the original `id`, original `revision`,
-   validated `project` and `merge: true`. A successful result is the evidence
-   that the change was saved; validation alone is not a save.
-3. Return the stored plan's `url` and a short description of what was saved.
-   The URL opens the original for signed-in members. Do not build a copy unless
-   the user requested one. Changes are visible to other plan members.
+## Tickets and comments
 
-### Concurrent edits and uncertain outcomes
+1. Find work with `tidigar_work` (`action: "mine"` for your open assignments,
+   `"search"` to filter by plan, `ref`, `prefix`, `unassigned`, `dated`,
+   `progress`, dates or dimension, and `"get"` to inspect one ticket with its
+   Markdown description, comments, history and completion blockers). You may
+   omit `id` on `"get"` to look up a ticket by `ref` across accessible plans; if
+   multiple plans match, `ambiguous_activity` lists all `candidates`.
+2. Claim, assign, update progress or complete work with `tidigar_edit_plan`
+   (`update: [{ target, claim?, takeOver?, assignee?, progress?, ... }]`).
+   Never set `takeOver: true` unless the user explicitly asks.
+3. Post Markdown result comments and `@mentions` with `tidigar_comment`
+   (`action: "add"` or `"list"`).
 
-- `merge_conflicts`: nothing was saved. Explain each conflict (`id`, `about`,
-  `change`, `base`, `mine`, `latest`) in plain words and ask the user which to
-  keep. Never choose for them. Call `tidigar_resolve_merge` with the same plan
-  `id`, original `revision` and complete edited `project` sent to the update,
-  plus `choices` mapping every conflict ID to `mine` or `latest`. Remote MCP
-  keeps no pending merge file. If new conflicts appear, ask about those and
-  resend all choices until resolved.
-- `stale_revision`: get the current plan again, compare it with the version
-  you read, redo the requested change while preserving others' work, validate
-  and save against the new revision. Ask about incompatible changes.
-- `write_unknown` or a lost response to a write: the save may have happened.
-  Read the plan and compare the stored result before attempting another write.
-  If the result cannot be established, report the uncertainty; do not retry
-  blindly or claim success.
+## Sharing, Christmas tree cards and screens
+
+- For stored plans, return the plan's short `url` (`/p/<code>`).
+- To generate a compact, chat-safe `#s=…` share link for an independent copy,
+  a Christmas tree card (`tree`) or a `drive` link, call `tidigar_share` with
+  `kind: "copy" | "tree" | "drive"` and either `id` or `plan`. Return the exact
+  `url` verbatim.
+- To manage live public wall screens (`kind: "screen"`, `action: "list" |
+  "create" | "update" | "delete" | "link"`), confirm with the user before
+  creating or permanently deleting a screen. Fix every `storyWarnings` entry
+  before returning a screen link.
 
 ## Access failures
 
 - `insufficient_scope`: the OAuth grant is read-only. Ask the host to authorize
-  the connection again with **Read and write**, then check `tidigar_status` and
-  reread the plan before saving. The host handles the MCP authorization challenge.
-- `invalid_token` or an expired or revoked connection: let the host refresh or
-  reconnect through OAuth, then check status and reread the plan. A user who
-  declined authorization has not approved a different access method.
-- `agent_access_off`, insufficient membership or `subscription_required`:
-  explain the actual restriction. A write grant cannot override membership,
-  subscription or the organisation owner's policy. Do not switch credentials
-  or protocols to bypass it. `subscription_required` on a read means the
-  organisation is not paid: its plans are unavailable until an owner
-  subscribes, and the same connection works again afterwards.
-- `no_such_plan`: check the selected organisation and plan link with the user.
-- `rate_limited`: respect `retryAfter`. After an uncertain write, read before
-  any retry.
-
-## Create, delete or restore a stored plan
-
-- **Create:** use the [plan JSON reference](https://tidigar.com/agents/plan-json.md)
-  for a new plan only. Call `tidigar_validate_plan` with `plan`, then
-  `tidigar_create_plan` with the returned `project` so its ID stays stable.
-  Return the saved plan's `url`. If creation's result is unknown, list/read and
-  compare that ID before retrying. `plan_exists` is not permission to duplicate
-  it; use `newId: true` only when the user asks for a new copy.
-- **Delete:** only when requested, confirm by plan name first. Read its current
-  revision and call `tidigar_delete_plan` with `id` and `revision`. It moves to
-  trash for 30 days. On `stale_revision`, read again and ask again.
-- **Restore:** call `tidigar_list_trash`, identify the requested plan, then
-  `tidigar_restore_plan` with its `id`.
-
-## Activities as tickets
-
-For Business and Server, a plan can work as a ticket list: give it a reference
-key prefix, a progress Board and a backlog List of undated work.
-
-1. Resume with `tidigar_list_my_activities`. Search with `tidigar_list_activities`
-   by plan and `ref` or across readable plans with `all: true`. For unassigned
-   backlog use `assignee: ""`, `dated: false` and `progress: 0`.
-   Open with `tidigar_get_activity`. Use the ID for ambiguous references. A milestone has `type: "milestone"`.
-2. Claim with `tidigar_claim_activity`. On `activity_claimed`, report who
-   holds it. Set `takeOver: true` only at the user's request.
-3. Use `tidigar_update_activity` with the revision read and changed fields.
-   Report 25, 50 or 75 as work advances. Ask the user about merge conflicts.
-4. Comment with `tidigar_add_comment`. Record the result, verification and
-   relevant commit or pull request.
-5. Set progress to 100 when done. This records today as the finish unless the
-   same request sends dates. If blocked, report the predecessor and
-   required progress and leave the ticket open.
-   [Report completion in List](https://tidigar.com/guides/board-list#report-completion-in-list).
-
-Create a ticket with `tidigar_add_activity`. Omit dates for backlog work.
-Write its specification as [Markdown source](https://tidigar.com/docs/file-format.html#item-activity)
-in `fields.description`. Read the same source back with `tidigar_get_activity`.
-An optional prefix selects its reference area. Use `tidigar_assign_activity`
-with an editor's account ID or an empty assignee to clear it.
-
-## Baseline
-
-Activity and assigned-work reads include follow-up status and available tracking.
-Use `tidigar_save_baseline` with the plan revision, UTC capture time in whole
-seconds and a new view UUID. Up to 20 named baselines are kept:
-`manifest.baseline` is the active one and `earlier` the rest.
-`tidigar_create_baseline` saves a new active one; `tidigar_activate_baseline`
-and `tidigar_delete_baseline` take its `baselineId`. All keep views.
-Repeat the same inputs if the reply is lost. If the revision is stale, read
-the plan again. Start, end and estimated cost are the current values that
-the baseline is compared with.
-
-## Comments
-
-Post a Markdown `body` as the user with `tidigar_add_comment`. Read newest first
-with `tidigar_list_comments` and pass `next` as `before` for older comments.
-Deleted comments have a null `body`. Agents never edit or delete comments.
-On `write_unknown`, read before retrying.
-
-## Screens and stories
-
-A screen publishes one saved view to anyone holding its link, without an
-account. Confirm with the user before creating one or permanently ending one.
-Use `tidigar_list_screens`, `tidigar_create_screen`, `tidigar_update_screen`,
-`tidigar_get_screen_link` and `tidigar_delete_screen`. A screen's `view` is the
-saved view ID in the project's `sharedViews`; keep that ID when changing what
-it shows. Deleting the view ends the screen. Give a screen link only to the
-user, never put it in a project, file or public place. `agent_screens_off`
-means the owners reserve making screens and retrieving links for people.
-
-To replay schedule versions, match activities by meaning and store the latest
-version. Follow "A plan's history" in the
-[story language](https://tidigar.com/agents/docs/stories.md). Fix every
-`storyWarnings` entry before returning the screen link.
+  the connection again with **Read and write**.
+- `invalid_token`, `agent_access_off`, `subscription_required`, `no_such_plan`,
+  `rate_limited`: report the actual restriction; never try to bypass it.
 
 ## Remote MCP arguments
 
-Use the host's tool calls, not shell commands. Fields marked `?` are optional;
-validation and creation take exactly one of `plan` or `project`. The tool
-schemas supplied by the server define field types and limits.
+Use the host's tool calls, not shell commands. Fields marked `?` are optional.
+The tool schemas supplied by the server define field types and limits.
 
 | Tool | Arguments |
 | --- | --- |
-| `tidigar_status` | none |
-| `tidigar_list_plans` | none |
-| `tidigar_get_plan` | `id` |
-| `tidigar_validate_plan` | `plan?`, `project?` |
-| `tidigar_update_plan` | `id`, `revision`, `project`, `merge?` |
-| `tidigar_resolve_merge` | `id`, `revision`, `project`, `choices` |
+| `tidigar_guide` | `topic?` |
+| `tidigar_list_plans` | `includeTrash?` |
+| `tidigar_get_plan` | `id`, `format?` |
 | `tidigar_create_plan` | `plan?`, `project?`, `newId?` |
-| `tidigar_delete_plan` | `id`, `revision` |
-| `tidigar_list_trash` | none |
-| `tidigar_restore_plan` | `id` |
-| `tidigar_list_screens` | `id` |
-| `tidigar_create_screen` | `id`, `view`, `name?`, `story?`, `joinCode?` |
-| `tidigar_update_screen` | `id`, `screen`, `name?`, `story?`, `joinCode?` |
-| `tidigar_get_screen_link` | `id`, `screen` |
-| `tidigar_delete_screen` | `id`, `screen` |
-| `tidigar_list_comments` | `id`, `activity`, `before?` |
-| `tidigar_add_comment` | `id`, `activity`, `body` |
-| `tidigar_list_my_activities` | none |
-| `tidigar_list_activities` | `id?`, `all?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?` |
-| `tidigar_get_activity` | `id`, `activity` |
-| `tidigar_save_baseline` | `id`, `revision`, `capturedAt`, `viewId` |
-| `tidigar_replace_baseline` | `id`, `revision`, `capturedAt` |
-| `tidigar_remove_baseline` | `id`, `revision` |
-| `tidigar_create_baseline` | `id`, `revision`, `baselineId`, `name`, `capturedAt` |
-| `tidigar_activate_baseline` | `id`, `revision`, `baselineId` |
-| `tidigar_delete_baseline` | `id`, `revision`, `baselineId` |
-| `tidigar_add_activity` | `id`, `fields`, `prefix?` |
-| `tidigar_update_activity` | `id`, `activity`, `revision`, `fields`, `choices?` |
-| `tidigar_assign_activity` | `id`, `activity`, `assignee` |
-| `tidigar_claim_activity` | `id`, `activity`, `takeOver?` |
+| `tidigar_edit_plan` | `id`, `revision?`, `name?`, `description?`, `workDays?`, `costCurrency?`, `costUnit?`, `dimensions?`, `add?`, `update?`, `remove?`, `view?` |
+| `tidigar_delete_plan` | `action`, `id`, `revision?` |
+| `tidigar_baseline` | `action`, `id`, `revision`, `name?`, `baselineId?`, `capturedAt?` |
+| `tidigar_share` | `kind`, `action?`, `id?`, `plan?`, `view?`, `screen?`, `name?`, `story?`, `joinCode?` |
+| `tidigar_work` | `action`, `id?`, `target?`, `ref?`, `prefix?`, `progress?`, `dated?`, `from?`, `through?`, `dimension?`, `value?`, `assignee?`, `unassigned?` |
+| `tidigar_comment` | `action`, `id`, `activity`, `body?`, `before?` |

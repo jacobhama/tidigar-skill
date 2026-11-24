@@ -1,6 +1,9 @@
-"""Readable Tidigar links (#t=1~...) from plans: https://tidigar.com/llms.txt
-python3 tidigar_link.py plan.json      build a link; - reads standard input
-python3 tidigar_link.py --read LINK    print a link's roadmap as a plan"""
+"""Readable Tidigar links (#t=1;...;e) from plans: https://tidigar.com/llms.txt
+python3 tidigar_link.py plan.json              build a link; - reads standard input
+python3 tidigar_link.py --tree plan.json       build a Christmas tree link (/t)
+python3 tidigar_link.py --drive plan.json      build a Drive link (/d)
+python3 tidigar_link.py --validate LINK        check a finished link without rewriting it
+python3 tidigar_link.py --read LINK            print a link's roadmap as a plan"""
 import datetime, json, re, sys, urllib.parse
 
 OPENER = "https://open.tidigar.com/s"
@@ -18,8 +21,10 @@ KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "c
         "milestone": ["key", "title", "start", "values", "dependsOn", "fixed"],
         "period": ["key", "title", "start", "end", "values"],
         "option": ["name", "color"], "view": list(VIEW)}
-AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group"}
+AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group", "sum": "timelineSummarizeBy"}
+AXIS_ALIASES = {"summarize": "timelineSummarizeBy"}
 MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow"}
+DATE_RE = re.compile(r"^(?:\d{4}-)?\d{2}-\d{2}$")
 
 
 def fail(path, message):
@@ -381,17 +386,18 @@ def to_payload(plan):
     return payload
 
 
-ESCAPED = set('%~/_&#"<>`(){}[]|\\^')
+ESCAPED = set('%~;/,+_&#"<>`(){}[]|\\^*!\'?@$')
 
 
 def field(value, also=""):
-    """Text in a field: a space is _, and what would split a field is escaped."""
-    return "".join("_" if c == " " else urllib.parse.quote(c, safe="") if c in ESCAPED or c in also or c.isspace()
+    """Text in a field: a space is _, and unsafe or non-ASCII chars are percent-encoded."""
+    return "".join("_" if c == " " else urllib.parse.quote(c, safe="")
+                   if c in ESCAPED or c in also or ord(c) > 0x7F or c.isspace()
                    else c for c in str(value)).replace("~", "%7E")
 
 
 def name(value):
-    return field(value, ",:@=")
+    return field(value, ":=")
 
 
 def size(text):
@@ -400,7 +406,7 @@ def size(text):
 
 
 def link(payload):
-    """The readable link of a checked payload: t=1~...~!"""
+    """The readable link of a checked payload: t=1;...;e"""
     if "b" in payload:
         raise ValueError("Plan JSON v1 cannot represent a baseline. Open the link in Tidigar to keep its tracking data.")
     year = payload["y"]
@@ -439,7 +445,7 @@ def link(payload):
     if payload.get("u"):
         out.append(f"u={field(payload['u'])}")
     for k, (dim, options) in enumerate(dims):
-        out.append(f"m{k + 1}={name(dim)}:" + ",".join(name(o) for o, _ in options))
+        out.append(f"m{k + 1}={name(dim)}:" + "+".join(name(o) for o, _ in options))
     for k, row in enumerate(rows):
         title, start, length, description, progress, values, after, shares = (row + ["", 0, 0, "", 0, [], [], []][len(row):])[:8]
         parts = [field(title), date(start), str(days(start, length))]
@@ -451,26 +457,26 @@ def link(payload):
                 chosen.append(f"{name(dims[d][0])}:{name(option)}" if shared or re.fullmatch(r"\d+p", option)
                               else name(option))
         if chosen:
-            parts.append(",".join(chosen))
+            parts.append("+".join(chosen))
         if after:
-            parts.append("@" + ",".join(key(x) + (f":{shares[i]}" if i < len(shares) and shares[i] != 100 else "")
-                                        for i, x in enumerate(after)))
+            parts.append("a=" + "+".join(key(x) + (f":{shares[i]}" if i < len(shares) and shares[i] != 100 else "")
+                                         for i, x in enumerate(after)))
         if progress:
             parts.append(f"{progress}p")
         if len(row) > 9:
-            parts.append(f"cost={row[9]}")
+            parts.append(f"c={row[9]}")
         if description:
             parts.append(f"d={field(description)}")
-        out.append(f"a{k + 1}=" + "/".join(parts))
+        out.append(f"a{k + 1}=" + ",".join(parts))
     for k, m in enumerate(marks):
         parts = [field(m[0]), date(m[1])]
         if m[3:4] == [1]:
-            parts.append("fixed")
+            parts.append("f")
         if len(m) > 2 and m[2]:
-            parts.append("@" + ",".join(key(x) for x in m[2]))
-        out.append(f"s{k + 1}=" + "/".join(parts))
+            parts.append("a=" + "+".join(key(x) for x in m[2]))
+        out.append(f"s{k + 1}=" + ",".join(parts))
     for k, p in enumerate(bands):
-        out.append(f"p{k + 1}={field(p[0])}/{date(p[1])}/{p[2] + 1}")
+        out.append(f"p{k + 1}={field(p[0])},{date(p[1])},{p[2] + 1}")
     o = payload.get("o")
     if o:
         parts = [MODES[o.get("view", "grid")]]
@@ -478,18 +484,23 @@ def link(payload):
         parts += [o["presentationStyle"]] if o.get("presentationStyle", "standard") != "standard" else []
         for axis, f in AXES.items():
             if f == "color" and o.get(f) == "follow-up-status":
-                parts.append("color:@follow-up-status")
+                parts.append("color:follow-up-status")
             elif o.get(f) == "progress":
-                parts.append(f"{axis}:{'@' if f == 'color' else ''}progress")
+                parts.append(f"{axis}:progress")
             elif isinstance(o.get(f), int):
                 dimension = name(dims[o[f]][0])
-                parts.append(f"{axis}:{'%70rogress' if dimension == 'progress' and f in ('row', 'col') else dimension}")
+                needs_escape = (dimension == "progress" and f in ("color", "row", "col")) or (
+                    dimension == "follow-up-status" and f == "color"
+                )
+                parts.append(
+                    f"{axis}:%{ord(dimension[0]):02X}{dimension[1:]}" if needs_escape else f"{axis}:{dimension}"
+                )
         for edge, f in (("start", "timelineStart"), ("end", "timelineEnd")):
             if o.get(f):
                 parts.append(f"{edge}:{date(datetime.date.fromisoformat(o[f]).toordinal() - base)}")
-        out.append("v=" + "/".join(parts))
-    out += [f"c={len(rows)}.{len(marks)}.{len(bands)}", "!"]
-    fragment = "~".join(out)
+        out.append("v=" + ",".join(parts))
+    out += [f"c={len(rows)}.{len(marks)}.{len(bands)}", "e"]
+    fragment = ";".join(out)
     if size(fragment) > 1900:
         raise ValueError(f"The roadmap is too large for a link. It needs {size(fragment)} of 1900 characters; "
                          "shorten titles, drop descriptions and merge small activities.")
@@ -499,15 +510,15 @@ def link(payload):
 def payload_of(url):
     """A readable link's payload. Raises an error naming every record that cannot be read."""
     fragment = url.split("#", 1)[-1].split("&", 1)[0]
-    records = fragment.split("~")
+    records = fragment.split(";")
     if records[0] == "t=2":
         raise ValueError("Plan JSON v1 cannot represent a baseline. Open the link in Tidigar to keep its tracking data.")
     if records[0] != "t=1":
-        raise ValueError("Give a readable Tidigar link, #t=1~...")
+        raise ValueError("Give a readable Tidigar link, #t=1;...")
     problems = []
     fields, lists = {}, {"a": {}, "s": {}, "p": {}, "m": {}}
     for record in records[1:]:
-        if record in ("", "!"):
+        if record in ("", "e", "end"):
             continue
         match = re.fullmatch(r"([a-z])(\d*)(?:=(.*))?", record, re.S)
         if not match:
@@ -543,15 +554,20 @@ def payload_of(url):
     dims = []
     for number, value in ordered["m"]:
         dim, _, options = value.partition(":")
-        dims.append([text(dim), [[text(o), COLORS[i % len(COLORS)]] for i, o in enumerate(options.split(",")) if o]])
+        dims.append([text(dim), [[text(o), COLORS[i % len(COLORS)]] for i, o in enumerate(options.split("+")) if o]])
     keys = {f"a{n}": i for i, (n, _) in enumerate(ordered["a"])}
     keys.update({f"s{n}": len(ordered["a"]) + i for i, (n, _) in enumerate(ordered["s"])})
     keys.update({f"p{n}": len(ordered["a"]) + len(ordered["s"]) + i for i, (n, _) in enumerate(ordered["p"])})
     bands = []
     for number, value in ordered["p"]:
-        title, start, length, *rest = value.split("/") + ["", ""]
+        title, start, span, *rest = value.split(",") + ["", ""]
         first = day(start, f"p{number}")
-        bands.append([text(title), first, count(length, f"p{number}") - 1, PERIOD_COLOR, 1])
+        if DATE_RE.match(span.strip()):
+            last = day(span, f"p{number}")
+            length = max(0, last - first)
+        else:
+            length = count(span, f"p{number}") - 1
+        bands.append([text(title), first, length, PERIOD_COLOR, 1])
     vacations = [(p[1], p[1] + p[2]) for p in bands]
 
     def end(first, n):
@@ -566,7 +582,7 @@ def payload_of(url):
 
     def option_numbers(value, where):
         numbers = [0] * len(dims)
-        for raw in filter(None, value.split(",")):
+        for raw in filter(None, value.split("+")):
             dim, _, option = raw.rpartition(":")
             hits = [(k, [o for o, _ in opts].index(text(option)) + 1) for k, (d, opts) in enumerate(dims)
                     if (not dim or d == text(dim)) and text(option) in [o for o, _ in opts]]
@@ -580,7 +596,7 @@ def payload_of(url):
 
     def after(value, where):
         refs, shares = [], []
-        for part in filter(None, value.split(",")):
+        for part in filter(None, value.split("+")):
             ref, _, share = part.partition(":")
             if ref not in keys:
                 problems.append(f"{where}: the dependency {ref} names no record")
@@ -594,21 +610,26 @@ def payload_of(url):
     rows = []
     for number, value in ordered["a"]:
         where = f"a{number}"
-        title, start, length, *rest = value.split("/") + ["", ""]
+        title, start, span, *rest = value.split(",") + ["", ""]
         first = day(start, where)
-        row = [text(title), first, end(first, count(length, where)), "", 0, [], [], []]
+        if DATE_RE.match(span.strip()):
+            last = day(span, where)
+            length = max(0, last - first)
+        else:
+            length = end(first, count(span, where))
+        row = [text(title), first, length, "", 0, [], [], []]
         amount = None
         for part in rest:
             if part.startswith("d="):
                 row[3] = text(part[2:])
-            elif part.startswith("cost="):
-                value = part[5:]
+            elif part.startswith("c=") or part.startswith("cost="):
+                value = part[2:] if part.startswith("c=") else part[5:]
                 if not re.fullmatch(r"\d{1,11}", value) or not 0 <= int(value) <= 99_999_999_999:
                     problems.append(f"{where}: cost must be an integer in minor units")
                 else:
                     amount = int(value)
-            elif part.startswith("@"):
-                row[6], row[7] = after(part[1:], where)
+            elif part.startswith("a=") or part.startswith("after="):
+                row[6], row[7] = after(part[2:] if part.startswith("a=") else part[6:], where)
             elif re.fullmatch(r"\d+p", part):
                 row[4] = int(part[:-1])
             elif part:
@@ -618,9 +639,13 @@ def payload_of(url):
         rows.append(row)
     marks = []
     for number, value in ordered["s"]:
-        title, date, *rest = value.split("/") + [""]
-        refs = next((after(x[1:], f"s{number}")[0] for x in rest if x.startswith("@")), [])
-        marks.append([text(title), day(date, f"s{number}"), refs, 1 if "fixed" in rest else 0])
+        title, date, *rest = value.split(",") + [""]
+        refs = next(
+            (after(x[2:] if x.startswith("a=") else x[6:], f"s{number}")[0]
+             for x in rest if x.startswith("a=") or x.startswith("after=")),
+            [],
+        )
+        marks.append([text(title), day(date, f"s{number}"), refs, 1 if ("f" in rest or "fixed" in rest) else 0])
     if problems:
         raise ValueError("; ".join(problems))
     payload = {"n": text(fields.get("n", "Roadmap")), "y": year}
@@ -636,23 +661,26 @@ def payload_of(url):
         if value:
             payload[key] = value
     if "v" in fields:
-        mode, *settings = fields["v"].split("/")
+        mode, *settings = fields["v"].split(",")
         if mode in LAYOUTS or mode in STYLES:
             mode, settings = "timeline", [mode] + settings
         o = {"view": {v: k for k, v in MODES.items()}.get(mode, "timeline")}
         names = [d for d, _ in dims]
         for setting in settings:
             axis, _, value = setting.partition(":")
+            target_field = AXES.get(axis) or AXIS_ALIASES.get(axis)
             if setting in LAYOUTS:
                 o["timelineActivityRows"] = LAYOUTS[setting]
             elif setting in STYLES:
                 o["presentationStyle"] = setting
-            elif axis == "color" and value == "@follow-up-status":
+            elif target_field == "color" and value in ("follow-up-status", "@follow-up-status"):
                 o["color"] = "follow-up-status"
-            elif (axis == "color" and value == "@progress") or (axis in ("rows", "columns") and value == "progress"):
-                o[AXES[axis]] = "progress"
-            elif axis in AXES and text(value) in names:
-                o[AXES[axis]] = names.index(text(value))
+            elif (target_field == "color" and value in ("progress", "@progress")) or (
+                target_field in ("row", "col") and value == "progress"
+            ):
+                o[target_field] = "progress"
+            elif target_field and text(value) in names:
+                o[target_field] = names.index(text(value))
             elif axis in ("start", "end"):
                 o["timeline" + axis.title()] = iso(base + day(value, "v"))
         payload["o"] = o
@@ -763,19 +791,64 @@ def summary(payload):
     return "\n".join(lines)
 
 
+def validate(url):
+    """Validate a finished readable link without rewriting it. Returns (summary, counts, length)."""
+    fragment = url.strip().split("#", 1)[-1].split("&", 1)[0]
+    length = size(fragment)
+    if length > 1900:
+        raise ValueError(f"The link needs {length} of 1900 characters.")
+    records = fragment.split(";")
+    if not records or records[0] not in ("t=1", "t=2"):
+        raise ValueError("Give a readable Tidigar link, #t=1;...")
+    if not any(r in ("e", "end") for r in records[1:]):
+        raise ValueError("e: the link has no end mark")
+    plan = read(url)
+    payload = to_payload(plan)
+    c_field = next((r[2:] for r in records[1:] if r.startswith("c=")), None)
+    actual = f"{len(payload.get('i', []))}.{len(payload.get('s', []))}.{len(payload.get('p', []))}"
+    if c_field is None:
+        raise ValueError("c: the link has no counts")
+    if c_field != actual:
+        raise ValueError(f"c: expects {c_field}; the link has {actual}")
+    return (
+        summary(payload),
+        (len(payload.get("i", [])), len(payload.get("s", [])), len(payload.get("p", []))),
+        length,
+    )
+
+
 if __name__ == "__main__" and "ipykernel" not in sys.modules:
     args = sys.argv[1:]
-    if args[:1] == ["--read"]:
+    flags = {a for a in args if a.startswith("--")}
+    rest = [a for a in args if not a.startswith("--")]
+    if "--validate" in flags:
+        if not rest:
+            sys.exit("Give the link to validate.")
         try:
-            print(json.dumps(read(args[1]), ensure_ascii=False, indent=2))
+            text_summary, (na, ns, np), length = validate(rest[0])
+        except ValueError as error:
+            sys.exit(str(error))
+        print(text_summary)
+        print(f"\nRecords: {na} activities, {ns} milestones, {np} periods.")
+        print(f"Fragment: {length} of 1900 characters.")
+        print("Valid: opens without corrections.")
+    elif "--read" in flags:
+        if not rest:
+            sys.exit("Give the link to read.")
+        try:
+            print(json.dumps(read(rest[0]), ensure_ascii=False, indent=2))
         except ValueError as error:
             sys.exit(str(error))
     else:
-        source = sys.stdin if args[:1] in ([], ["-"]) else open(args[0], encoding="utf-8")
+        source = sys.stdin if rest[:1] in ([], ["-"]) else open(rest[0], encoding="utf-8")
         plan = json.load(source)
         try:
             payload = to_payload(plan)
             url = link(payload)
         except ValueError as error:
             sys.exit(str(error))
+        if "--tree" in flags:
+            url = url.replace(OPENER, OPENER[:-2] + "/t", 1)
+        elif "--drive" in flags:
+            url = url.replace(OPENER, OPENER[:-2] + "/d", 1)
         print(url + "\n\n" + summary(payload) + f"\n\nFragment: {size(url) - len(OPENER) - 1} of 1900 characters.")

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "tidigar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Create Tidigar roadmaps and Gantt charts as share links without an account, or connect to read and update plans stored in Tidigar or Tidigar Server.",
   "author": {
     "name": "Hamacher Software AB",
