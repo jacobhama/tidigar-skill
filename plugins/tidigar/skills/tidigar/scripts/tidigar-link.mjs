@@ -4366,7 +4366,10 @@ const scope = { crypto: globalThis.crypto };
       for (const field of rest) {
         if (field === 'f' || field === 'fixed') fixed = 1;
         else if (field.startsWith('a=') || field.startsWith('after='))
-          [dependsOn] = dependenciesOf(field.startsWith('a=') ? field.slice(2) : field.slice(6), key);
+          [dependsOn] = dependenciesOf(
+            field.startsWith('a=') ? field.slice(2) : field.slice(6),
+            key,
+          );
         else if (field)
           note(key, `${JSON.stringify(field)} is not a milestone field and was ignored`);
       }
@@ -4422,10 +4425,7 @@ const scope = { crypto: globalThis.crypto };
             'v',
             `${JSON.stringify(axis)} is not classic, compact, costs, a style, rows, columns, color, group, sum, cost-group, start or end`,
           );
-        else if (
-          field === 'color' &&
-          (name === 'follow-up-status' || name === '@follow-up-status')
-        )
+        else if (field === 'color' && (name === 'follow-up-status' || name === '@follow-up-status'))
           view[field] = 'follow-up-status';
         else if (
           (field === 'color' && (name === 'progress' || name === '@progress')) ||
