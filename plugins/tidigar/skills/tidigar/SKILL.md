@@ -137,6 +137,8 @@ Exit 0 means the link opens without corrections. Exit 1 reports invalid input or
 
 ## Reference, only when needed
 
+- [Workflow recipes](references/workflows.md): screenshot or
+  photo to Gantt, Christmas tree (`/t`), Drive (`/d`) and large-plan fallbacks.
 - [Share link specification](references/share-links.md):
   complete syntax and opening behavior, for edge cases.
 - [Plan JSON and builders](references/plan-json.md): optional
@@ -145,7 +147,6 @@ Exit 0 means the link opens without corrections. Exit 1 reports invalid input or
   remote MCP, delegated OAuth connection and safe updates for chat assistants.
 - [Examples](example_sharelink.md): a larger plan,
   its optional JSON representation and a link change.
-- [Workflow recipes](references/workflows.md): screenshot/photo to Gantt, Christmas tree (`/t`), Drive (`/d`), and large-plan fallbacks.
 - [Example roadmaps](https://tidigar.com/examples/): plans to start from.
 - [Roadmaps in Markdown](https://tidigar.com/agents/docs/markdown.md),
   [embed stories](https://tidigar.com/agents/docs/stories.md) and
