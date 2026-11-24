@@ -30,8 +30,8 @@ Use the CLI when `tidigar status` exits 0. It keeps the token in the system's
 credential store. An environment configured with `TIDIGAR_TOKEN` may also use
 [HTTP](#stored-plans-over-http). If neither is configured, explain that no
 stored plan has been read, saved or changed. The user follows
-[connection setup](https://tidigar.com/agents/cloud) and enters credentials
-outside the chat. Never ask for a token in the chat, print it or write it to a
+[connection setup](https://tidigar.com/agents/cloud) and runs `tidigar login`
+in their terminal to approve access in the browser. Never ask for a token in the chat, print it or write it to a
 file. A share-link copy is an alternative only for a new plan, never a
 substitute for a requested save or update.
 
