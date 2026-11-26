@@ -105,7 +105,7 @@ p1=Autumn_break,10-26,5
 ### Dimensions and the view
 
 - `m1=Team:Household+Installer` defines ordered options with standard colors.
-- `v=` selects `timeline`, `board`, `list` or `flow`. Use dimension names and
+- `v=` selects `timeline`, `board`, `list`, `flow` or `dashboard`. Use dimension names and
   dates, as in `v=timeline,color:Team,group:Phase,start:10-01,end:12-31` (and
   `sum:Phase`, alias `summarize:`, for timeline summarization). Board uses
   `rows:` and `columns:`. Add `costs` to show totals, with optional List

@@ -23,7 +23,7 @@ KEYS = {"plan": ["$schema", "version", "name", "description", "costCurrency", "c
         "option": ["name", "color"], "view": list(VIEW)}
 AXES = {"rows": "row", "columns": "col", "color": "color", "group": "group", "sum": "timelineSummarizeBy"}
 AXIS_ALIASES = {"summarize": "timelineSummarizeBy"}
-MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow"}
+MODES = {"grid": "board", "timeline": "timeline", "list": "list", "flow": "flow", "dashboard": "dashboard"}
 DATE_RE = re.compile(r"^(?:\d{4}-)?\d{2}-\d{2}$")
 
 
@@ -345,8 +345,8 @@ def to_payload(plan):
             continue
         value = view[key]
         if key == "type":
-            if value not in ("timeline", "grid", "list", "flow"):
-                fail("view.type", "must be timeline, grid, list, flow")
+            if value not in ("timeline", "grid", "list", "flow", "dashboard"):
+                fail("view.type", "must be timeline, grid, list, flow, dashboard")
             o["view"] = value
         elif key in ("start", "end"):
             o[field] = iso(day(value, f"view.{key}"))

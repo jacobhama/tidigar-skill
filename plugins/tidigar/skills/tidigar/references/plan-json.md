@@ -67,7 +67,7 @@ directly, use [llms.txt](https://tidigar.com/llms.txt).
 - Titles are at most 180 characters; milestones and periods need one.
 - `milestones`: `{ "title", "start" }`; `periods`: `{ "title", "start", "end" }`. Both take
   `key` and `values`. A period is time off: a plan in work days has no work days during it.
-- `view`: `type` is `"timeline"`, `"grid"`, `"list"` or `"flow"`; `groupBy`, `colorBy`, `rows` and
+- `view`: `type` is `"timeline"`, `"grid"`, `"list"`, `"flow"` or `"dashboard"`; `groupBy`, `colorBy`, `rows` and
   `columns` take dimension names. Except for `groupBy`, they also take `"@progress"`.
   `start` and `end` set the timeline range. `layout` is
   `"classic"`, one activity per row under a label column as in MS Project, or `"compact"`,

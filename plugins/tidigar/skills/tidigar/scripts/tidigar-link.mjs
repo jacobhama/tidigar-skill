@@ -1382,7 +1382,7 @@ const scope = { crypto: globalThis.crypto };
 
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
-  const VIEWS = new Set(['grid', 'timeline', 'list', 'flow']);
+  const VIEWS = new Set(['grid', 'timeline', 'list', 'flow', 'dashboard']);
   const RESOLUTIONS = new Set(['year', 'quarter', 'month', 'week']);
   const TEXT_MODES = new Set(['hide', 'beside', 'run-past', 'fit', 'under']);
   const ACTIVITY_ROW_MODES = new Set(['single', 'single-label', 'compact']);
@@ -2153,7 +2153,8 @@ const scope = { crypto: globalThis.crypto };
       const projectId = ownerValue(source.projectId, context, `${path}.projectId`);
       const name = stringValue(source.name, `${path}.name`, 100, true);
       const mode = source.view === undefined ? 'grid' : source.view;
-      if (!VIEWS.has(mode)) invalid(`${path}.view`, 'must be grid, timeline, list, or flow');
+      if (!VIEWS.has(mode))
+        invalid(`${path}.view`, 'must be grid, timeline, list, flow, or dashboard');
       const rowAxis = normalizeAxisReference(source.row, dimensions, `${path}.row`, true);
       const col = normalizeAxisReference(source.col, dimensions, `${path}.col`, true);
       const row = rowAxis === col ? '' : rowAxis;
@@ -3289,6 +3290,7 @@ const scope = { crypto: globalThis.crypto };
         'network',
         'graph',
       ],
+      dashboard: ['dashboard', 'kpi', 'kpis', 'översikt', 'nøkkeltal', 'nyckeltal', 'kennzahlen'],
     }).flatMap(([view, names]) => names.map((name) => [name, view])),
   );
 
@@ -3815,7 +3817,7 @@ const scope = { crypto: globalThis.crypto };
           }
         if (
           typeof view.view === 'string' &&
-          !['grid', 'timeline', 'list', 'flow'].includes(view.view)
+          !['grid', 'timeline', 'list', 'flow', 'dashboard'].includes(view.view)
         ) {
           const mode = VIEW_NAMES.get(view.view.trim().toLocaleLowerCase('en'));
           note(
@@ -3987,7 +3989,14 @@ const scope = { crypto: globalThis.crypto };
   // The colors options get in order, since a readable link carries none.
   const COLORS = ['4f7cff', '16a34a', 'f59e0b', '8a52c1', '0891b2', 'dc5f5f', '64748b', 'db2777'];
   const PERIOD_COLOR = '9aa7b5';
-  const VIEWS = { timeline: 'timeline', board: 'grid', grid: 'grid', list: 'list', flow: 'flow' };
+  const VIEWS = {
+    timeline: 'timeline',
+    board: 'grid',
+    grid: 'grid',
+    list: 'list',
+    flow: 'flow',
+    dashboard: 'dashboard',
+  };
   const VIEW_AXES = {
     rows: 'row',
     columns: 'col',
@@ -4629,9 +4638,13 @@ const scope = { crypto: globalThis.crypto };
     }
     if (payload.o) {
       const view = payload.o;
-      const mode = { grid: 'board', timeline: 'timeline', list: 'list', flow: 'flow' }[
-        view.view ?? 'grid'
-      ];
+      const mode = {
+        grid: 'board',
+        timeline: 'timeline',
+        list: 'list',
+        flow: 'flow',
+        dashboard: 'dashboard',
+      }[view.view ?? 'grid'];
       const settings = [mode];
       if (view.showCostSummary) settings.push('costs');
       const layout = Object.keys(LAYOUTS).find(
@@ -6166,7 +6179,7 @@ const scope = { crypto: globalThis.crypto };
   const SCHEMA = 'https://tidigar.com/agents/schema/plan-v1.json';
   const COLORS = ['4f7cff', '16a34a', 'f59e0b', '8a52c1', '0891b2', 'dc5f5f', '64748b', 'db2777'];
   const PERIOD_COLOR = '9aa7b5';
-  const VIEW_TYPES = ['timeline', 'grid', 'list', 'flow'];
+  const VIEW_TYPES = ['timeline', 'grid', 'list', 'flow', 'dashboard'];
   // Plan view keys and the link's view fields they set; the dimension
   // references hold a dimension's name in the plan and its index in a link.
   const VIEW_FIELDS = {
